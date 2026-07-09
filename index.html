@@ -4,81 +4,57 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#1a1a2e">
-<title>⚽ Pool Analyzer</title>
+<meta name="theme-color" content="#0a0a1a">
+<title>Pool Analyzer</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html { font-size: 16px; }
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: #0a0a1a;
-    min-height: 100vh;
     color: #e0e0e0;
-    padding-bottom: 80px;
-    overflow-x: hidden;
+    padding: 12px;
+    padding-bottom: 100px;
+    line-height: 1.5;
 }
-.container { max-width: 100%; padding: 12px; }
-header {
-    text-align: center;
-    padding: 20px 10px 15px;
-    border-bottom: 2px solid #e94560;
-    margin-bottom: 15px;
-    position: sticky;
-    top: 0;
-    background: #0a0a1a;
-    z-index: 100;
-}
-h1 { font-size: 1.6em; color: #e94560; }
-.subtitle { color: #888; font-size: 0.85em; margin-top: 4px; }
-.disclaimer {
-    margin-top: 10px;
-    padding: 8px;
-    background: rgba(233,69,96,0.1);
-    border-radius: 8px;
-    border-left: 3px solid #e94560;
-    font-size: 0.75em;
-    color: #ff6b6b;
-}
-.section {
-    background: rgba(255,255,255,0.04);
+.card {
+    background: rgba(255,255,255,0.05);
     border-radius: 16px;
     padding: 16px;
     margin-bottom: 12px;
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
 }
-.section-title {
-    color: #e94560;
-    font-size: 1.1em;
+h1 { color: #e94560; text-align: center; font-size: 1.6em; margin-bottom: 4px; }
+.subtitle { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 12px; }
+.warning {
+    background: rgba(233,69,96,0.1);
+    border-left: 3px solid #e94560;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.8em;
+    color: #ff6b6b;
     margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
-.input-group { margin-bottom: 10px; }
 label {
     display: block;
-    margin-bottom: 4px;
     color: #aaa;
-    font-size: 0.8em;
+    font-size: 0.75em;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    margin-top: 10px;
 }
-input, select {
+input, select, textarea {
     width: 100%;
-    padding: 12px 14px;
+    padding: 12px;
     border-radius: 12px;
     border: 1px solid rgba(255,255,255,0.1);
     background: rgba(0,0,0,0.3);
     color: #fff;
     font-size: 1em;
-    -webkit-appearance: none;
+    font-family: inherit;
 }
-input:focus, select:focus {
-    outline: none;
-    border-color: #e94560;
-    background: rgba(0,0,0,0.5);
-}
+textarea { min-height: 100px; resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560; }
 .btn {
     display: block;
     width: 100%;
@@ -89,188 +65,83 @@ input:focus, select:focus {
     font-weight: 600;
     cursor: pointer;
     text-align: center;
-    margin-bottom: 8px;
-    transition: transform 0.1s;
+    margin-top: 10px;
 }
-.btn:active { transform: scale(0.97); }
-.btn-primary { background: linear-gradient(135deg, #e94560, #c73e54); color: white; }
-.btn-green { background: linear-gradient(135deg, #2d8a4e, #236b3d); color: white; }
-.btn-blue { background: linear-gradient(135deg, #4a90d9, #3a7bc8); color: white; }
-.btn-purple { background: linear-gradient(135deg, #8e44ad, #7d3c98); color: white; }
+.btn-red { background: #e94560; color: white; }
+.btn-green { background: #2d8a4e; color: white; }
+.btn-blue { background: #4a90d9; color: white; }
+.btn-purple { background: #8e44ad; color: white; }
+.btn-orange { background: #e67e22; color: white; }
 .btn-gray { background: #333; color: #ccc; }
-.btn-small { padding: 8px 14px; font-size: 0.85em; width: auto; display: inline-block; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.btn-small { padding: 8px 14px; font-size: 0.85em; width: auto; display: inline-block; margin-top: 0; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .match-card {
     background: rgba(0,0,0,0.25);
-    border-radius: 14px;
-    padding: 16px;
-    margin-bottom: 10px;
-    border: 1px solid rgba(233,69,96,0.2);
-    position: relative;
-}
-.match-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-}
-.match-num {
-    color: #e94560;
-    font-weight: 700;
-    font-size: 0.9em;
-}
-.match-id {
-    font-size: 0.7em;
-    color: #666;
-    background: rgba(255,255,255,0.05);
-    padding: 2px 8px;
-    border-radius: 10px;
-}
-.odds-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
-    margin-top: 6px;
-}
-.odds-row input {
-    text-align: center;
-    padding: 10px 4px;
-    font-size: 0.95em;
-}
-.odds-h { border-color: rgba(233,69,96,0.4) !important; }
-.odds-m { border-color: rgba(74,144,217,0.4) !important; }
-.odds-f { border-color: rgba(45,138,78,0.4) !important; }
-.result-card {
-    background: rgba(0,0,0,0.3);
     border-radius: 12px;
     padding: 14px;
     margin-bottom: 10px;
+    border: 1px solid rgba(233,69,96,0.2);
+}
+.match-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.match-title { color: #e94560; font-weight: 700; font-size: 0.9em; }
+.match-id { font-size: 0.7em; color: #666; background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 10px; }
+.odds-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+.odds-row input { text-align: center; padding: 10px 4px; }
+.form-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 6px; }
+.form-row input { text-align: center; padding: 10px 2px; font-size: 0.9em; }
+.section-title { color: #e94560; font-size: 1.1em; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.paste-box {
+    background: rgba(0,0,0,0.2);
+    border: 2px dashed rgba(233,69,96,0.3);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+.hint { color: #666; font-size: 0.8em; margin-top: 8px; line-height: 1.5; }
+.result-card {
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 8px;
     border-left: 3px solid;
 }
-.result-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-.result-teams { font-weight: 600; font-size: 0.95em; }
 .badge {
-    padding: 4px 12px;
+    padding: 4px 10px;
     border-radius: 20px;
-    font-size: 0.8em;
+    font-size: 0.75em;
     font-weight: 700;
     color: white;
 }
-.prob-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
-    font-size: 0.75em;
-    color: #888;
-    margin-top: 6px;
-}
-.value-text {
-    font-size: 0.8em;
-    margin-top: 6px;
-    font-weight: 600;
-}
-.risk-banner {
-    padding: 14px;
-    border-radius: 12px;
-    margin-bottom: 14px;
-    text-align: center;
-    font-weight: 700;
-    font-size: 0.9em;
-    border: 2px solid;
-}
-.value-section {
+.value-box {
     background: rgba(45, 138, 78, 0.08);
-    border-radius: 12px;
-    padding: 14px;
-    margin-top: 14px;
+    border-radius: 10px;
+    padding: 12px;
+    margin-top: 12px;
     border: 1px solid rgba(45,138,78,0.3);
 }
-.value-section h3 {
-    color: #2d8a4e;
-    font-size: 0.95em;
+.value-box h3 { color: #2d8a4e; font-size: 0.9em; margin-bottom: 8px; }
+.ticket-card {
+    border-radius: 12px;
+    padding: 14px;
     margin-bottom: 10px;
 }
-.value-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(45,138,78,0.15);
-    font-size: 0.85em;
-}
-.ticket-card {
-    border-radius: 14px;
-    padding: 16px;
-    margin-bottom: 12px;
-}
-.ticket-green { border: 2px solid #2d8a4e; background: rgba(45,138,78,0.08); }
-.ticket-blue { border: 2px solid #4a90d9; background: rgba(74,144,217,0.08); }
-.ticket-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin: 10px 0;
-}
-.ticket-item {
-    background: rgba(0,0,0,0.25);
-    padding: 8px;
-    border-radius: 8px;
-    font-size: 0.85em;
-}
-.ticket-item .teams { color: #888; font-size: 0.8em; }
-.ticket-item .pick { font-weight: 700; margin-top: 2px; }
-.value-pick { color: #2d8a4e; }
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    margin-top: 12px;
-}
-.stat-card {
-    background: rgba(0,0,0,0.25);
-    padding: 14px 8px;
-    border-radius: 12px;
-    text-align: center;
-}
-.stat-num { font-size: 1.6em; font-weight: 700; }
-.stat-label { color: #888; font-size: 0.7em; margin-top: 4px; }
-.learning-status {
-    margin-top: 12px;
-    padding: 14px;
-    background: rgba(142, 68, 173, 0.1);
-    border-radius: 12px;
-    font-size: 0.9em;
-    line-height: 1.6;
-}
+.ticket-green { border: 2px solid #2d8a4e; background: rgba(45,138,78,0.06); }
+.ticket-blue { border: 2px solid #4a90d9; background: rgba(74,144,217,0.06); }
 .bottom-nav {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(10,10,26,0.95);
-    backdrop-filter: blur(20px);
-    border-top: 1px solid rgba(255,255,255,0.06);
-    padding: 10px 16px;
+    background: rgba(10,10,26,0.98);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 10px 12px;
     display: flex;
     gap: 8px;
     z-index: 1000;
 }
-.bottom-nav .btn { margin: 0; font-size: 0.85em; padding: 12px 8px; }
+.bottom-nav .btn { margin: 0; font-size: 0.9em; padding: 12px 6px; }
 .hidden { display: none !important; }
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.fade-in { animation: fadeIn 0.3s ease-out; }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #e94560; border-radius: 4px; }
 .toast {
     position: fixed;
     bottom: 90px;
@@ -278,174 +149,216 @@ input:focus, select:focus {
     transform: translateX(-50%);
     background: #2d8a4e;
     color: white;
-    padding: 12px 24px;
-    border-radius: 12px;
+    padding: 12px 20px;
+    border-radius: 10px;
     font-weight: 600;
     z-index: 2000;
-    animation: fadeIn 0.3s ease-out;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    animation: fadeIn 0.3s;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+.prompt-output {
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    padding: 12px;
+    margin-top: 10px;
+    font-size: 0.85em;
+    line-height: 1.6;
+    color: #ccc;
+    border: 1px solid rgba(74,144,217,0.3);
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 </style>
 </head>
 <body>
-<div class="container">
-    <header>
-        <h1>⚽ Pool Analyzer</h1>
-        <p class="subtitle">Soccer 6 · 10 · 13</p>
-        <div class="disclaimer">⚠️ Educational tool. No profit guarantees.</div>
-    </header>
 
-    <!-- QUICK ACTIONS -->
-    <div class="section">
-        <div class="grid-2">
-            <button class="btn btn-green" onclick="loadLastPool()">📂 Load Last Pool</button>
-            <button class="btn btn-gray" onclick="savePool()">💾 Save Pool</button>
-        </div>
-        <div style="margin-top: 10px; display: flex; gap: 8px;">
-            <button class="btn btn-blue" onclick="exportData()" style="flex:1;">📤 Export JSON</button>
-            <button class="btn btn-purple" onclick="document.getElementById('importFile').click()" style="flex:1;">📥 Import JSON</button>
-            <input type="file" id="importFile" class="hidden" accept=".json" onchange="importData(this)">
-        </div>
+<h1>⚽ Pool Analyzer</h1>
+<p class="subtitle">Soccer 6 · 10 · 13</p>
+<div class="warning">⚠️ Educational tool. No profit guarantees.</div>
+
+<!-- SAVE / LOAD -->
+<div class="card">
+    <div class="grid-2">
+        <button class="btn btn-green" onclick="loadLastPool()">📂 Load Last</button>
+        <button class="btn btn-gray" onclick="savePool()">💾 Save</button>
     </div>
+    <div class="grid-2" style="margin-top:8px;">
+        <button class="btn btn-blue" onclick="exportData()">📤 Export</button>
+        <button class="btn btn-purple" onclick="document.getElementById('importFile').click()">📥 Import</button>
+        <input type="file" id="importFile" class="hidden" accept=".json" onchange="importData(this)">
+    </div>
+</div>
 
-    <!-- POOL CONFIG -->
-    <div class="section">
-        <div class="section-title">📋 Pool</div>
-        <div class="grid-2">
-            <div>
-                <label>Type</label>
-                <select id="poolType">
-                    <option value="Soccer6">Soccer 6 (R6)</option>
-                    <option value="Soccer10">Soccer 10 (R2)</option>
-                    <option value="Soccer13">Soccer 13 (R2)</option>
-                </select>
-            </div>
-            <div>
-                <label>Round</label>
-                <input type="text" id="roundName" value="Week 32">
-            </div>
+<!-- SMART PASTE -->
+<div class="card">
+    <div class="section-title">📋 Smart Paste</div>
+    <p style="color:#aaa;font-size:0.85em;margin-bottom:10px;">
+        Copy fixtures from Interbet and paste here. Auto-detects teams and odds.
+    </p>
+    <div class="paste-box">
+        <textarea id="pasteInput" placeholder="Paste here...
+
+Example formats that work:
+1. Man Utd vs Liverpool (H:3.5 D:3.2 A:2.1)
+2. Arsenal v Chelsea H:1.9 D:3.4 A:4.0
+3. Bayern Munich - Dortmund 1.60 3.80 5.50
+
+Or just paste raw text from Interbet page"></textarea>
+    </div>
+    <button class="btn btn-orange" onclick="parsePastedData()">🧠 Parse & Fill Matches</button>
+    <button class="btn btn-gray" onclick="document.getElementById('pasteInput').value=''" style="margin-top:6px;">Clear</button>
+    <p class="hint">
+        💡 <strong>Tip:</strong> Include team names and odds. The parser handles various formats.
+    </p>
+</div>
+
+<!-- PROMPT CREATOR -->
+<div class="card">
+    <div class="section-title">🤖 Prompt Creator</div>
+    <p style="color:#aaa;font-size:0.85em;margin-bottom:10px;">
+        Generate an AI prompt to fetch form data for your matches. Copy & paste into ChatGPT/Claude/Gemini.
+    </p>
+    <button class="btn btn-blue" onclick="generatePrompt()">✨ Generate AI Prompt</button>
+    <div id="promptOutput" class="prompt-output hidden"></div>
+    <button class="btn btn-gray" onclick="copyPrompt()" id="copyPromptBtn" style="margin-top:8px;display:none;">📋 Copy Prompt</button>
+    <p class="hint">
+        💡 The AI will return goals scored/conceded averages. Paste the response back into each match's form fields.
+    </p>
+</div>
+
+<!-- POOL CONFIG -->
+<div class="card">
+    <div class="section-title">⚙️ Pool Config</div>
+    <div class="grid-2">
+        <div>
+            <label>Pool Type</label>
+            <select id="poolType">
+                <option value="Soccer6">Soccer 6 (R6)</option>
+                <option value="Soccer10">Soccer 10 (R2)</option>
+                <option value="Soccer13">Soccer 13 (R2)</option>
+            </select>
         </div>
-    </div>
-
-    <!-- MATCHES -->
-    <div class="section">
-        <div class="section-title">🎯 Matches</div>
-        <button class="btn btn-primary" onclick="addMatch()">➕ Add Match</button>
-        <button class="btn btn-gray" onclick="clearAll()" style="margin-top:8px;">Clear All</button>
-        <div id="matchesContainer" style="margin-top: 12px;"></div>
-    </div>
-
-    <!-- ANALYSIS -->
-    <div class="section">
-        <div class="section-title">🔬 Models</div>
-        <div class="grid-3">
-            <div>
-                <label>Poisson</label>
-                <input type="range" id="poissonWeight" min="0" max="100" value="35" oninput="updateWeight('poisson',this.value)">
-                <div style="text-align:center;color:#e94560;font-weight:700;font-size:0.9em;" id="poissonDisplay">35%</div>
-            </div>
-            <div>
-                <label>Elo</label>
-                <input type="range" id="eloWeight" min="0" max="100" value="35" oninput="updateWeight('elo',this.value)">
-                <div style="text-align:center;color:#e94560;font-weight:700;font-size:0.9em;" id="eloDisplay">35%</div>
-            </div>
-            <div>
-                <label>Market</label>
-                <input type="range" id="marketWeight" min="0" max="100" value="30" oninput="updateWeight('market',this.value)">
-                <div style="text-align:center;color:#e94560;font-weight:700;font-size:0.9em;" id="marketDisplay">30%</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- RESULTS -->
-    <div id="resultsSection" class="section hidden">
-        <div class="section-title">📊 Results</div>
-        <div class="risk-banner" id="riskBanner"></div>
-        <div id="matchesResults"></div>
-        <div class="value-section">
-            <h3>💎 Value Picks</h3>
-            <div id="valueList"></div>
+        <div>
+            <label>Round Name</label>
+            <input type="text" id="roundName" value="Week 32">
         </div>
     </div>
+</div>
 
-    <!-- TICKETS -->
-    <div id="ticketsSection" class="section hidden">
-        <div class="section-title">🎫 Tickets</div>
-        <div id="ticketsList"></div>
-    </div>
+<!-- MATCHES -->
+<div class="card">
+    <div class="section-title">🎯 Matches</div>
+    <button class="btn btn-red" onclick="addMatch()">➕ Add Match Manually</button>
+    <button class="btn btn-gray" onclick="clearAll()" style="margin-top:6px;">Clear All</button>
+    <div id="matchesContainer" style="margin-top: 12px;"></div>
+</div>
 
-    <!-- LEARNING -->
-    <div class="section">
-        <div class="section-title">🧠 Learning</div>
-        <div class="grid-2">
-            <div>
-                <label>Match ID</label>
-                <input type="text" id="learnMatchId" placeholder="e.g. m1">
-            </div>
-            <div>
-                <label>Result</label>
-                <select id="actualResult">
-                    <option value="H">Home Win</option>
-                    <option value="D">Draw</option>
-                    <option value="A">Away Win</option>
-                </select>
-            </div>
+<!-- MODELS -->
+<div class="card">
+    <div class="section-title">🔬 Models</div>
+    <div class="grid-3">
+        <div>
+            <label>Poisson</label>
+            <input type="range" id="poissonWeight" min="0" max="100" value="35" oninput="updateWeight('poisson',this.value)">
+            <div style="text-align:center;color:#e94560;font-weight:700;" id="poissonDisplay">35%</div>
         </div>
-        <div style="margin-top: 10px; display: flex; gap: 8px;">
-            <button class="btn btn-blue" onclick="recordOutcome()" style="flex:1;">📝 Record</button>
-            <button class="btn btn-purple" onclick="selfLearn()" style="flex:1;">🔄 Learn</button>
+        <div>
+            <label>Elo</label>
+            <input type="range" id="eloWeight" min="0" max="100" value="35" oninput="updateWeight('elo',this.value)">
+            <div style="text-align:center;color:#e94560;font-weight:700;" id="eloDisplay">35%</div>
         </div>
-        <div id="learningStatus" class="learning-status hidden"></div>
-        <div id="performanceStats"></div>
-    </div>
-
-    <!-- STATS SUMMARY -->
-    <div class="section">
-        <div class="section-title">📈 Stats</div>
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-num" style="color:#e94560;" id="statOutcomes">0</div>
-                <div class="stat-label">Outcomes</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-num" style="color:#4a90d9;" id="statTeams">0</div>
-                <div class="stat-label">Teams Rated</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-num" style="color:#2d8a4e;" id="statAccuracy">--</div>
-                <div class="stat-label">Accuracy</div>
-            </div>
+        <div>
+            <label>Market</label>
+            <input type="range" id="marketWeight" min="0" max="100" value="30" oninput="updateWeight('market',this.value)">
+            <div style="text-align:center;color:#e94560;font-weight:700;" id="marketDisplay">30%</div>
         </div>
     </div>
+</div>
 
-    <!-- HOW TO -->
-    <div class="section">
-        <div class="section-title">📖 How To</div>
-        <ol style="line-height: 1.8; color: #aaa; font-size: 0.85em; padding-left: 18px;">
-            <li>Add matches from Interbet pool</li>
-            <li>Enter pool odds + market odds (optional)</li>
-            <li>Input recent form (goals avg)</li>
-            <li>Tap Run Analysis</li>
-            <li>Review value picks & place bets</li>
-            <li>After matches, record results</li>
-            <li>Tap Self-Learn to improve</li>
-        </ol>
+<!-- RESULTS -->
+<div id="resultsSection" class="card hidden">
+    <div class="section-title">📊 Results</div>
+    <div id="riskBanner" style="padding:12px;border-radius:10px;margin-bottom:12px;text-align:center;font-weight:700;border:2px solid;"></div>
+    <div id="matchesResults"></div>
+    <div class="value-box">
+        <h3>💎 Value Picks</h3>
+        <div id="valueList"></div>
     </div>
+</div>
+
+<!-- TICKETS -->
+<div id="ticketsSection" class="card hidden">
+    <div class="section-title">🎫 Tickets</div>
+    <div id="ticketsList"></div>
+</div>
+
+<!-- LEARNING -->
+<div class="card">
+    <div class="section-title">🧠 Learning</div>
+    <div class="grid-2">
+        <div>
+            <label>Match ID</label>
+            <input type="text" id="learnMatchId" placeholder="e.g. m1">
+        </div>
+        <div>
+            <label>Result</label>
+            <select id="actualResult">
+                <option value="H">Home Win</option>
+                <option value="D">Draw</option>
+                <option value="A">Away Win</option>
+            </select>
+        </div>
+    </div>
+    <div class="grid-2" style="margin-top:8px;">
+        <button class="btn btn-blue" onclick="recordOutcome()">📝 Record</button>
+        <button class="btn btn-purple" onclick="selfLearn()">🔄 Learn</button>
+    </div>
+    <div id="learningStatus" style="margin-top:10px;padding:12px;background:rgba(142,68,173,0.1);border-radius:10px;display:none;"></div>
+</div>
+
+<!-- STATS -->
+<div class="card">
+    <div class="section-title">📈 Stats</div>
+    <div class="grid-3">
+        <div style="text-align:center;padding:12px;background:rgba(0,0,0,0.2);border-radius:10px;">
+            <div style="font-size:1.8em;color:#e94560;font-weight:700;" id="statOutcomes">0</div>
+            <div style="color:#888;font-size:0.75em;">Outcomes</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:rgba(0,0,0,0.2);border-radius:10px;">
+            <div style="font-size:1.8em;color:#4a90d9;font-weight:700;" id="statTeams">0</div>
+            <div style="color:#888;font-size:0.75em;">Teams Rated</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:rgba(0,0,0,0.2);border-radius:10px;">
+            <div style="font-size:1.8em;color:#2d8a4e;font-weight:700;" id="statAccuracy">--</div>
+            <div style="color:#888;font-size:0.75em;">Accuracy</div>
+        </div>
+    </div>
+</div>
+
+<!-- HOW TO -->
+<div class="card">
+    <div class="section-title">📖 Quick Guide</div>
+    <ol style="color:#aaa;font-size:0.85em;padding-left:18px;line-height:1.9;">
+        <li><strong>Smart Paste:</strong> Copy Interbet fixtures → paste → tap Parse</li>
+        <li><strong>Prompt Creator:</strong> Tap "Generate AI Prompt" → copy to ChatGPT → paste results back</li>
+        <li><strong>Analyze:</strong> Tap 🚀 Analyze (bottom)</li>
+        <li><strong>Bet:</strong> Use recommendations, place on Interbet manually</li>
+        <li><strong>Learn:</strong> After matches, enter results → tap 🔄 Learn</li>
+    </ol>
 </div>
 
 <!-- BOTTOM NAV -->
 <div class="bottom-nav">
-    <button class="btn btn-primary" onclick="runAnalysis()">🚀 Analyze</button>
+    <button class="btn btn-red" onclick="runAnalysis()">🚀 Analyze</button>
     <button class="btn btn-green" onclick="generateTickets()">🎫 Tickets</button>
-    <button class="btn btn-blue" onclick="scrollToTop()">⬆️ Top</button>
+    <button class="btn btn-blue" onclick="window.scrollTo({top:0,behavior:'smooth'})">⬆️ Top</button>
 </div>
 
 <script>
-let matches = [];
-let matchCounter = 0;
+let matches = [], matchCounter = 0;
 let modelWeights = { poisson: 0.35, elo: 0.35, market: 0.30 };
-let teamRatings = {};
-let outcomes = [];
+let teamRatings = {}, outcomes = [];
+let currentPrompt = '';
 
 function loadFromStorage() {
     const saved = localStorage.getItem('poolAnalyzerData');
@@ -466,19 +379,129 @@ function loadFromStorage() {
     }
 }
 function saveToStorage() {
-    const data = { teamRatings: teamRatings, outcomes: outcomes, modelWeights: modelWeights, savedAt: new Date().toISOString() };
-    localStorage.setItem('poolAnalyzerData', JSON.stringify(data));
-    showToast('💾 Saved to phone');
+    localStorage.setItem('poolAnalyzerData', JSON.stringify({
+        teamRatings, outcomes, modelWeights, savedAt: new Date().toISOString()
+    }));
 }
-function showToast(msg) {
+function toast(msg) {
     const existing = document.querySelector('.toast');
     if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.className = 'toast';
-    toast.textContent = msg;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2000);
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2000);
 }
+
+// ============================================================
+// SMART PASTE
+// ============================================================
+
+function parsePastedData() {
+    const text = document.getElementById('pasteInput').value.trim();
+    if (!text) { toast('Paste something first!'); return; }
+    
+    const lines = text.split('\n').filter(l => l.trim().length > 5);
+    const parsed = [];
+    
+    for (const line of lines) {
+        const t = line.trim();
+        let m = null;
+        
+        // Pattern: "1. Team A vs Team B (H:3.5 D:3.2 A:2.1)"
+        let r = t.match(/(?:^|\s)(?:\d+[.\)]?\s*)?(.+?)\s+(?:vs|v\.|against|\-)\s+(.+?)(?:\s*[(\[]?\s*H\s*[:=]\s*([\d.]+)[\s/;,]*D\s*[:=]\s*([\d.]+)[\s/;,]*A\s*[:=]\s*([\d.]+))?/i);
+        if (r && r[1] && r[2]) {
+            m = { home: clean(r[1]), away: clean(r[2]), ph: r[3]||'', pd: r[4]||'', pa: r[5]||'' };
+        }
+        
+        // Pattern: "Team A - Team B 2.10 3.20 3.50"
+        if (!m) {
+            r = t.match(/(.+?)(?:\s*[-—]\s*)(.+?)(?:\s+([\d.]+)\s+([\d.]+)\s+([\d.]+))\s*$/);
+            if (r && r[3] && r[4] && r[5]) {
+                m = { home: clean(r[1]), away: clean(r[2]), ph: r[3], pd: r[4], pa: r[5] };
+            }
+        }
+        
+        // Pattern: Just "Team A vs Team B"
+        if (!m) {
+            r = t.match(/(.+?)\s+(?:vs|v\.|against)\s+(.+)/i);
+            if (r) m = { home: clean(r[1]), away: clean(r[2]), ph: '', pd: '', pa: '' };
+        }
+        
+        if (m && m.home.length > 2 && m.away.length > 2) parsed.push(m);
+    }
+    
+    if (parsed.length === 0) { toast('❌ Could not parse. Try: "Team A vs Team B"'); return; }
+    
+    clearAll();
+    parsed.forEach(p => addMatch(p.home, p.away, detectLeague(p.home, p.away), p.ph, p.pd, p.pa, '', '', '', '', '', '', ''));
+    toast(`✅ Parsed ${parsed.length} matches!`);
+    document.getElementById('pasteInput').value = '';
+}
+
+function clean(s) {
+    return s.replace(/^[\d.\)\-\s]+/, '').replace(/\s+/g, ' ').replace(/\(.*?\)/g, '').trim();
+}
+function detectLeague(h, a) {
+    const s = (h + ' ' + a).toLowerCase();
+    if (s.includes('manchester') || s.includes('liverpool') || s.includes('arsenal') || s.includes('chelsea') || s.includes('tottenham')) return 'EPL';
+    if (s.includes('bayern') || s.includes('dortmund') || s.includes('leverkusen')) return 'Bundesliga';
+    if (s.includes('real madrid') || s.includes('barcelona') || s.includes('atletico')) return 'La Liga';
+    if (s.includes('juventus') || s.includes('milan') || s.includes('inter') || s.includes('napoli') || s.includes('roma')) return 'Serie A';
+    if (s.includes('psg') || s.includes('lyon') || s.includes('marseille')) return 'Ligue 1';
+    if (s.includes('sundowns') || s.includes('pirates') || s.includes('chiefs') || s.includes('supersport')) return 'PSL';
+    return 'EPL';
+}
+
+// ============================================================
+// PROMPT CREATOR
+// ============================================================
+
+function generatePrompt() {
+    if (matches.length === 0) { toast('Add matches first!'); return; }
+    
+    let prompt = `I need recent form data for soccer matches. For each team below, provide their average goals scored and goals conceded per game over their LAST 5 MATCHES in their current league.\n\nFormat your response EXACTLY like this for each team:\nTeam Name: GS=X.X, GC=X.X\n\nWhere GS = goals scored average, GC = goals conceded average.\n\nTeams I need data for:\n`;
+    
+    const teams = new Set();
+    matches.forEach(m => {
+        const h = document.getElementById(`home_${m}`).value;
+        const a = document.getElementById(`away_${m}`).value;
+        if (h) teams.add(h);
+        if (a) teams.add(a);
+    });
+    
+    teams.forEach(t => { prompt += `- ${t}\n`; });
+    
+    prompt += `\nPlease be precise. Use data from the current 2025/2026 season only. If you cannot find exact data, estimate based on recent performance. Return ONLY the formatted lines, no extra text.`;
+    
+    currentPrompt = prompt;
+    
+    const out = document.getElementById('promptOutput');
+    out.textContent = prompt;
+    out.classList.remove('hidden');
+    document.getElementById('copyPromptBtn').style.display = 'block';
+    toast('✨ Prompt generated!');
+}
+
+function copyPrompt() {
+    if (!currentPrompt) return;
+    navigator.clipboard.writeText(currentPrompt).then(() => {
+        toast('📋 Prompt copied!');
+    }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = currentPrompt;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('📋 Prompt copied!');
+    });
+}
+
+// ============================================================
+// CORE FUNCTIONS
+// ============================================================
+
 function init() {
     loadFromStorage();
     if (Object.keys(teamRatings).length === 0) {
@@ -488,71 +511,68 @@ function init() {
             "Orlando Pirates": 1550, "Mamelodi Sundowns": 1600, "Real Madrid": 1820, "Barcelona": 1760
         };
     }
-    if (matches.length === 0) {
-        addMatch("Man Utd", "Liverpool", "EPL", 3.5, 3.2, 2.1, 3.8, 3.4, 2.0, 1.8, 1.2, 2.1, 0.9);
-        addMatch("Arsenal", "Chelsea", "EPL", 1.9, 3.4, 4.0, 1.85, 3.5, 4.2, 2.2, 0.8, 1.4, 1.3);
-        addMatch("Bayern", "Dortmund", "Bundesliga", 1.6, 3.8, 5.5, 1.55, 4.0, 6.0, 2.5, 1.0, 1.8, 1.4);
-    }
     updateStats();
 }
+
 function addMatch(home="", away="", league="EPL", ph="", pd="", pa="", mh="", md="", ma="", hgs="", hgc="", ags="", agc="") {
     matchCounter++;
     const id = `m${matchCounter}`;
     const div = document.createElement('div');
-    div.className = 'match-card fade-in';
+    div.className = 'match-card';
     div.id = `match_${id}`;
     div.innerHTML = `
         <div class="match-header">
-            <span class="match-num">Match ${matchCounter}</span>
-            <span class="match-id">${id}</span>
+            <span class="match-title">Match ${matchCounter}</span>
+            <span class="match-id">ID: ${id}</span>
             <button class="btn btn-gray btn-small" onclick="removeMatch('${id}')">✕</button>
         </div>
         <div class="grid-2">
-            <input type="text" id="home_${id}" placeholder="Home" value="${home}">
-            <input type="text" id="away_${id}" placeholder="Away" value="${away}">
+            <input type="text" id="home_${id}" placeholder="Home Team" value="${home}">
+            <input type="text" id="away_${id}" placeholder="Away Team" value="${away}">
         </div>
         <input type="text" id="league_${id}" placeholder="League" value="${league}" style="margin-top:8px;">
-        <label style="margin-top:10px;">Pool Odds</label>
+        <label style="margin-top:10px;">Pool Odds (H / D / A)</label>
         <div class="odds-row">
-            <input type="number" step="0.01" class="odds-h" id="ph_${id}" placeholder="H" value="${ph}">
-            <input type="number" step="0.01" class="odds-h" id="pd_${id}" placeholder="D" value="${pd}">
-            <input type="number" step="0.01" class="odds-h" id="pa_${id}" placeholder="A" value="${pa}">
+            <input type="number" step="0.01" id="ph_${id}" placeholder="H" value="${ph}">
+            <input type="number" step="0.01" id="pd_${id}" placeholder="D" value="${pd}">
+            <input type="number" step="0.01" id="pa_${id}" placeholder="A" value="${pa}">
         </div>
-        <label style="margin-top:8px;">Market Odds (opt)</label>
+        <label>Market Odds (H / D / A) - Optional</label>
         <div class="odds-row">
-            <input type="number" step="0.01" class="odds-m" id="mh_${id}" placeholder="H" value="${mh}">
-            <input type="number" step="0.01" class="odds-m" id="md_${id}" placeholder="D" value="${md}">
-            <input type="number" step="0.01" class="odds-m" id="ma_${id}" placeholder="A" value="${ma}">
+            <input type="number" step="0.01" id="mh_${id}" placeholder="H" value="${mh}">
+            <input type="number" step="0.01" id="md_${id}" placeholder="D" value="${md}">
+            <input type="number" step="0.01" id="ma_${id}" placeholder="A" value="${ma}">
         </div>
-        <label style="margin-top:8px;">Form: H-GS / H-GC / A-GS / A-GC</label>
-        <div class="grid-4">
-            <input type="number" step="0.1" class="odds-f" id="hgs_${id}" placeholder="GS" value="${hgs}">
-            <input type="number" step="0.1" class="odds-f" id="hgc_${id}" placeholder="GC" value="${hgc}">
-            <input type="number" step="0.1" class="odds-f" id="ags_${id}" placeholder="GS" value="${ags}">
-            <input type="number" step="0.1" class="odds-f" id="agc_${id}" placeholder="GC" value="${agc}">
+        <label>Form: Home GS / Home GC / Away GS / Away GC</label>
+        <div class="form-row">
+            <input type="number" step="0.1" id="hgs_${id}" placeholder="H GS" value="${hgs}">
+            <input type="number" step="0.1" id="hgc_${id}" placeholder="H GC" value="${hgc}">
+            <input type="number" step="0.1" id="ags_${id}" placeholder="A GS" value="${ags}">
+            <input type="number" step="0.1" id="agc_${id}" placeholder="A GC" value="${agc}">
         </div>
     `;
     document.getElementById('matchesContainer').appendChild(div);
     matches.push(id);
 }
+
 function removeMatch(id) {
     const el = document.getElementById(`match_${id}`);
-    if (el) { el.style.opacity = '0'; setTimeout(() => el.remove(), 200); }
+    if (el) el.remove();
     matches = matches.filter(m => m !== id);
 }
 function clearAll() {
-    if (!confirm('Clear all matches?')) return;
+    if (matches.length > 0 && !confirm('Clear all matches?')) return;
     document.getElementById('matchesContainer').innerHTML = '';
-    matches = [];
-    matchCounter = 0;
+    matches = []; matchCounter = 0;
 }
 function updateWeight(type, val) {
     document.getElementById(type + 'Display').textContent = val + '%';
     modelWeights[type] = parseInt(val) / 100;
 }
-function scrollToTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+
 function factorial(n) { return n <= 1 ? 1 : n * factorial(n-1); }
 function poissonP(l, k) { return Math.exp(-l) * Math.pow(l, k) / factorial(k); }
+
 function poissonModel(m) {
     const hgs = parseFloat(document.getElementById(`hgs_${m}`).value) || 1.5;
     const hgc = parseFloat(document.getElementById(`hgc_${m}`).value) || 1.2;
@@ -570,6 +590,7 @@ function poissonModel(m) {
     const t = pH + pD + pA;
     return { H: pH/t, D: pD/t, A: pA/t };
 }
+
 function eloModel(m) {
     const home = document.getElementById(`home_${m}`).value;
     const away = document.getElementById(`away_${m}`).value;
@@ -583,6 +604,7 @@ function eloModel(m) {
     const t = pH + pD + pA;
     return { H: pH/t, D: pD/t, A: pA/t };
 }
+
 function marketModel(m) {
     const mh = parseFloat(document.getElementById(`mh_${m}`).value);
     const md = parseFloat(document.getElementById(`md_${m}`).value);
@@ -591,6 +613,7 @@ function marketModel(m) {
     const rH = 1/mh, rD = 1/md, rA = 1/ma, or = rH + rD + rA;
     return { H: rH/or, D: rD/or, A: rA/or };
 }
+
 function combinedModel(m) {
     const p = poissonModel(m), e = eloModel(m), mk = marketModel(m);
     const tW = modelWeights.poisson + modelWeights.elo + modelWeights.market;
@@ -601,6 +624,7 @@ function combinedModel(m) {
     const t = cH + cD + cA;
     return { H: cH/t, D: cD/t, A: cA/t, poisson: p, elo: e, market: mk };
 }
+
 function calcValue(m, c) {
     const ph = parseFloat(document.getElementById(`ph_${m}`).value);
     const pd = parseFloat(document.getElementById(`pd_${m}`).value);
@@ -612,8 +636,9 @@ function calcValue(m, c) {
     const best = Object.keys(val).reduce((a,b) => val[a] > val[b] ? a : b);
     return { poolP, val, best, score: val[best] };
 }
+
 function runAnalysis() {
-    if (matches.length === 0) { showToast('Add matches first!'); return; }
+    if (matches.length === 0) { toast('Add matches first!'); return; }
     const resultsDiv = document.getElementById('matchesResults');
     resultsDiv.innerHTML = '';
     let totalConf = 0, minConf = 1, maxConf = 0;
@@ -631,17 +656,17 @@ function runAnalysis() {
         if (v && v.score > 0.05) valueOps.push({ match: `${home} vs ${away}`, sel: v.best, score: v.score });
         const color = conf > 0.5 ? '#2d8a4e' : conf > 0.4 ? '#f39c12' : '#e94560';
         resultsDiv.innerHTML += `
-            <div class="result-card fade-in" style="border-left-color:${color};">
-                <div class="result-header">
-                    <span class="result-teams">${home} vs ${away}</span>
+            <div class="result-card" style="border-left-color:${color};">
+                <div class="match-header">
+                    <span style="font-weight:600;">${home} vs ${away}</span>
                     <span class="badge" style="background:${color};">${best} ${(conf*100).toFixed(0)}%</span>
                 </div>
-                <div class="prob-row">
-                    <div>Poisson: H${(c.poisson.H*100).toFixed(0)}% D${(c.poisson.D*100).toFixed(0)}% A${(c.poisson.A*100).toFixed(0)}%</div>
-                    <div>Elo: H${(c.elo.H*100).toFixed(0)}% D${(c.elo.D*100).toFixed(0)}% A${(c.elo.A*100).toFixed(0)}%</div>
-                    <div>Mkt: H${(c.market.H*100).toFixed(0)}% D${(c.market.D*100).toFixed(0)}% A${(c.market.A*100).toFixed(0)}%</div>
+                <div style="font-size:0.75em;color:#888;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px;">
+                    <div>P: H${(c.poisson.H*100).toFixed(0)}% D${(c.poisson.D*100).toFixed(0)}% A${(c.poisson.A*100).toFixed(0)}%</div>
+                    <div>E: H${(c.elo.H*100).toFixed(0)}% D${(c.elo.D*100).toFixed(0)}% A${(c.elo.A*100).toFixed(0)}%</div>
+                    <div>M: H${(c.market.H*100).toFixed(0)}% D${(c.market.D*100).toFixed(0)}% A${(c.market.A*100).toFixed(0)}%</div>
                 </div>
-                ${v ? `<div class="value-text" style="color:${v.score>0?'#2d8a4e':'#e94560'};">💎 ${v.best} ${v.score>0?'+':''}${(v.score*100).toFixed(1)}% edge</div>` : ''}
+                ${v ? `<div style="font-size:0.8em;margin-top:6px;color:${v.score>0?'#2d8a4e':'#e94560'};font-weight:600;">💎 ${v.best} ${v.score>0?'+':''}${(v.score*100).toFixed(1)}% edge</div>` : ''}
             </div>`;
     });
     const avgConf = totalConf / matches.length;
@@ -652,14 +677,17 @@ function runAnalysis() {
     banner.innerHTML = `${risk} RISK | Avg ${(avgConf*100).toFixed(0)}% | Low ${(minConf*100).toFixed(0)}% | High ${(maxConf*100).toFixed(0)}%`;
     const vl = document.getElementById('valueList');
     vl.innerHTML = valueOps.length ? valueOps.map(v => `
-        <div class="value-item"><span>${v.match}</span><span style="color:#2d8a4e;font-weight:700;">${v.sel} +${(v.score*100).toFixed(1)}%</span></div>
-    `).join('') : '<div style="color:#666;font-size:0.85em;">No value found</div>';
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(45,138,78,0.15);font-size:0.85em;">
+            <span>${v.match}</span><span style="color:#2d8a4e;font-weight:700;">${v.sel} +${(v.score*100).toFixed(1)}%</span>
+        </div>
+    `).join('') : '<div style="color:#666;font-size:0.85em;">No value opportunities found</div>';
     document.getElementById('resultsSection').classList.remove('hidden');
     window.lastAnalysis = { recommendations, valueOps };
-    showToast('✅ Analysis complete');
+    toast('✅ Analysis complete');
 }
+
 function generateTickets() {
-    if (!window.lastAnalysis) { showToast('Run analysis first!'); return; }
+    if (!window.lastAnalysis) { toast('Run analysis first!'); return; }
     const { recommendations, valueOps } = window.lastAnalysis;
     const list = document.getElementById('ticketsList');
     list.innerHTML = '';
@@ -670,31 +698,42 @@ function generateTickets() {
     });
     const fee = document.getElementById('poolType').value === 'Soccer6' ? 6 : 2;
     list.innerHTML += `
-        <div class="ticket-card ticket-green fade-in">
-            <h3 style="color:#2d8a4e;font-size:1em;">🎯 Value Ticket</h3>
-            <div class="ticket-grid">${matches.map(m => {
-                const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
-                const isV = valueOps.some(v => v.match.includes(h));
-                return `<div class="ticket-item" ${isV?'style="border:1px solid #2d8a4e;"':''}><div class="teams">${h} v ${a}</div><div class="pick ${isV?'value-pick':''}">${vs[m]}${isV?' 💎':''}</div></div>`;
-            }).join('')}</div>
-            <div style="text-align:right;color:#e94560;font-weight:700;">R${fee}</div>
+        <div class="ticket-card ticket-green">
+            <h3 style="color:#2d8a4e;font-size:0.95em;margin-bottom:10px;">🎯 Value Ticket</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
+                ${matches.map(m => {
+                    const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
+                    const isV = valueOps.some(v => v.match.includes(h));
+                    return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;${isV?'border:1px solid #2d8a4e;':''}">
+                        <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
+                        <div style="font-weight:700;color:${isV?'#2d8a4e':'#fff'};">${vs[m]}${isV?' 💎':''}</div>
+                    </div>`;
+                }).join('')}
+            </div>
+            <div style="text-align:right;color:#e94560;font-weight:700;">Cost: R${fee}</div>
         </div>`;
     list.innerHTML += `
-        <div class="ticket-card ticket-blue fade-in">
-            <h3 style="color:#4a90d9;font-size:1em;">⭐ Confidence Ticket</h3>
-            <div class="ticket-grid">${matches.map(m => {
-                const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
-                return `<div class="ticket-item"><div class="teams">${h} v ${a}</div><div class="pick">${recommendations[m]}</div></div>`;
-            }).join('')}</div>
-            <div style="text-align:right;color:#e94560;font-weight:700;">R${fee}</div>
+        <div class="ticket-card ticket-blue">
+            <h3 style="color:#4a90d9;font-size:0.95em;margin-bottom:10px;">⭐ Confidence Ticket</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
+                ${matches.map(m => {
+                    const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
+                    return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;">
+                        <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
+                        <div style="font-weight:700;">${recommendations[m]}</div>
+                    </div>`;
+                }).join('')}
+            </div>
+            <div style="text-align:right;color:#e94560;font-weight:700;">Cost: R${fee}</div>
         </div>`;
     document.getElementById('ticketsSection').classList.remove('hidden');
-    showToast('🎫 Tickets generated');
+    toast('🎫 Tickets generated');
 }
+
 function recordOutcome() {
     const mid = document.getElementById('learnMatchId').value;
     const res = document.getElementById('actualResult').value;
-    if (!mid) { showToast('Enter Match ID'); return; }
+    if (!mid) { toast('Enter Match ID'); return; }
     outcomes.push({ mid, res, time: new Date().toISOString() });
     const el = document.getElementById(`match_${mid}`);
     if (el) {
@@ -709,15 +748,16 @@ function recordOutcome() {
     }
     saveToStorage();
     const status = document.getElementById('learningStatus');
-    status.classList.remove('hidden');
+    status.style.display = 'block';
     status.innerHTML = `✅ ${mid} → ${res}<br>📊 ${outcomes.length} outcomes recorded`;
     updateStats();
-    showToast('Outcome recorded');
+    toast('Outcome recorded');
 }
+
 function selfLearn() {
     if (outcomes.length < 5) {
         const s = document.getElementById('learningStatus');
-        s.classList.remove('hidden');
+        s.style.display = 'block';
         s.innerHTML = `⚠️ Need 5+ outcomes. Have: ${outcomes.length}`;
         return;
     }
@@ -747,11 +787,12 @@ function selfLearn() {
     updateWeight('market', Math.round(modelWeights.market * 100));
     saveToStorage();
     const status = document.getElementById('learningStatus');
-    status.classList.remove('hidden');
-    status.innerHTML = `🧠 Learned!<br>📊 Last ${t}: Poisson ${(pA*100).toFixed(0)}% | Elo ${(eA*100).toFixed(0)}% | Mkt ${(mA*100).toFixed(0)}%<br>⚖️ New: P${(modelWeights.poisson*100).toFixed(0)}% E${(modelWeights.elo*100).toFixed(0)}% M${(modelWeights.market*100).toFixed(0)}%`;
+    status.style.display = 'block';
+    status.innerHTML = `🧠 Learned!<br>📊 Last ${t}: P${(pA*100).toFixed(0)}% E${(eA*100).toFixed(0)}% M${(mA*100).toFixed(0)}%<br>⚖️ New: P${(modelWeights.poisson*100).toFixed(0)}% E${(modelWeights.elo*100).toFixed(0)}% M${(modelWeights.market*100).toFixed(0)}%`;
     updateStats();
-    showToast('Weights updated');
+    toast('Weights updated');
 }
+
 function updateStats() {
     document.getElementById('statOutcomes').textContent = outcomes.length;
     document.getElementById('statTeams').textContent = Object.keys(teamRatings).length;
@@ -765,6 +806,7 @@ function updateStats() {
         document.getElementById('statAccuracy').textContent = (correct / outcomes.length * 100).toFixed(0) + '%';
     }
 }
+
 function savePool() {
     const poolData = {
         poolType: document.getElementById('poolType').value,
@@ -782,11 +824,12 @@ function savePool() {
     };
     localStorage.setItem('lastPool', JSON.stringify(poolData));
     saveToStorage();
-    showToast('💾 Pool saved');
+    toast('💾 Pool saved');
 }
+
 function loadLastPool() {
     const saved = localStorage.getItem('lastPool');
-    if (!saved) { showToast('No saved pool'); return; }
+    if (!saved) { toast('No saved pool'); return; }
     const data = JSON.parse(saved);
     document.getElementById('poolType').value = data.poolType;
     document.getElementById('roundName').value = data.roundName;
@@ -796,19 +839,21 @@ function loadLastPool() {
                  m.marketOdds.H, m.marketOdds.D, m.marketOdds.A,
                  m.form.hgs, m.form.hgc, m.form.ags, m.form.agc);
     });
-    showToast('📂 Pool loaded');
+    toast('📂 Pool loaded');
 }
+
 function exportData() {
     const data = { teamRatings, outcomes, modelWeights, lastPool: localStorage.getItem('lastPool'), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pool-analyzer-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `pool-analyzer-${new Date().toISOString().slice(0,10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('📤 Exported');
+    toast('📤 Exported');
 }
+
 function importData(input) {
     const file = input.files[0];
     if (!file) return;
@@ -830,11 +875,12 @@ function importData(input) {
             if (data.lastPool) localStorage.setItem('lastPool', data.lastPool);
             saveToStorage();
             updateStats();
-            showToast('📥 Imported successfully');
-        } catch (err) { showToast('❌ Import failed'); }
+            toast('📥 Imported');
+        } catch (err) { toast('❌ Import failed'); }
     };
     reader.readAsText(file);
 }
+
 init();
 </script>
 </body>
