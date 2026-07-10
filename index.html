@@ -498,7 +498,7 @@ function parsePastedData() {
     const text = document.getElementById('pasteInput').value.trim();
     if (!text) { toast('Paste something first!'); return; }
 
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const lines = text.split('\n').map(l => l.trim());
     const parsed = [];
 
     // Strategy: Interbet raw format with tabs and blank lines
@@ -619,7 +619,7 @@ function clean(s) {
 
 function cleanTeamName(s) {
     // Remove odds-like numbers, clean whitespace, remove common suffixes
-    return s.replace(/^[\d.\s]+/, '')
+    return s.replace(/^[\d.\)\-\s]+/, '')
             .replace(/\s+/g, ' ')
             .replace(/\(.*?\)/g, '')
             .replace(/^(Win|Draw|Loss|Form|Team\s*[AB])\s*/i, '')
@@ -650,21 +650,28 @@ function detectLeague(h, a) {
 function generatePrompt() {
     if (matches.length === 0) { toast('Add matches first!'); return; }
 
-    let prompt = `I need recent form data for soccer matches. For each team below, provide their average goals scored and goals conceded per game over their LAST 5 MATCHES in their current league.\n\nFormat your response EXACTLY like this for each team:\nTeam Name: GS=X.X, GC=X.X\n\nWhere GS = goals scored average, GC = goals conceded average.\n\nTeams I need data for:\n`;
+    let prompt = `I need data for soccer matches. For each team below, provide:\n\n1. Average goals scored and conceded per game over LAST 5 MATCHES\n2. Current market odds (1X2) if available\n3. Recent form (W-D-L in last 5)\n\nFormat EXACTLY like this for each team:\nTeam Name: GS=X.X, GC=X.X, W=X, D=X, L=X\n\nIf you have match odds, also include:\nMatch: Team A vs Team B | H=X.XX, D=X.XX, A=X.XX\n\nTeams I need data for:\n`;
 
     const teams = new Set();
+    const matchList = [];
     matches.forEach(m => {
         const h = document.getElementById(`home_${m}`);
         const a = document.getElementById(`away_${m}`);
-        if (h && h.value) teams.add(h.value);
-        if (a && a.value) teams.add(a.value);
+        if (h && h.value && a && a.value) {
+            teams.add(h.value);
+            teams.add(a.value);
+            matchList.push(`${h.value} vs ${a.value}`);
+        }
     });
 
     if (teams.size === 0) { toast('No team names found'); return; }
 
     teams.forEach(t => { prompt += `- ${t}\n`; });
 
-    prompt += `\nPlease be precise. Use data from the current 2026 season. If you cannot find exact data, estimate based on recent performance. Return ONLY the formatted lines, no extra text.`;
+    prompt += `\nMatches:\n`;
+    matchList.forEach(m => { prompt += `- ${m}\n`; });
+
+    prompt += `\nUse current 2026 season data. If exact data unavailable, estimate. Return ONLY formatted lines, no extra text or URLs.`;
 
     currentPrompt = prompt;
 
@@ -1411,6 +1418,7 @@ function previewFormData() {
     text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
     text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
     text = text.replace(/https?:\/\/[^\s]+/g, ' ');
+    text = text.replace(/\s*\[\d+\]\s*/g, ' ');
     text = text.replace(/\s+/g, ' ').trim();
 
     const teamData = {};
