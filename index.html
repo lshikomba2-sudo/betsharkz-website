@@ -501,44 +501,70 @@ function parsePastedData() {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     const parsed = [];
 
-    // Try Interbet raw format first (league header, teamA, odds1, odds2, odds3, teamB)
+    // Strategy: Interbet raw format with tabs and blank lines
+    // Pattern: League header, then TeamA, odds, odds, odds, TeamB (with blank lines between)
     let i = 0;
     while (i < lines.length) {
         const line = lines[i];
 
-        // Detect league/competition header
-        const isLeagueHeader = /(World Cup|League|Cup|Conference|Europa|Champions|Premier|Bundesliga|La Liga|Serie|Ligue)/i.test(line);
+        // Detect league/competition header (contains "in Xh Xm" or "Tomorrow")
+        const isLeagueHeader = /(First Division|Premier Division|World Cup|Serie|League|Cup|Conference|Europa|Champions|Tomorrow)/i.test(line);
 
         if (isLeagueHeader) {
             i++;
-            // Look for: TeamA (newline) odd1 (newline) odd2 (newline) odd3 (newline) TeamB
-            if (i < lines.length) {
-                const teamA = cleanTeamName(lines[i]);
+            // Collect team A and odds - skip blank lines
+            const teamLines = [];
+            while (i < lines.length && teamLines.length < 5) {
+                const candidate = lines[i].trim();
+                if (candidate.length > 0) {
+                    teamLines.push(candidate);
+                }
                 i++;
+                // Safety: don't go too far
+                if (i > lines.length) break;
+            }
+
+            // teamLines should now be: [TeamA, odd1, odd2, odd3, TeamB] 
+            // But sometimes there are blank lines mixed in, so we need to be smart
+
+            if (teamLines.length >= 2) {
+                const teamA = cleanTeamName(teamLines[0]);
+
+                // Find the 3 odds (numeric values between 1.01 and 100)
                 const odds = [];
-                // Collect up to 3 numeric odds
-                while (i < lines.length && odds.length < 3) {
-                    const val = parseFloat(lines[i]);
+                let teamB = '';
+                let teamBIndex = -1;
+
+                for (let j = 1; j < teamLines.length; j++) {
+                    const val = parseFloat(teamLines[j]);
                     if (!isNaN(val) && val > 1 && val < 100) {
                         odds.push(val.toFixed(2));
-                        i++;
-                    } else {
-                        break;
+                    } else if (teamLines[j].length > 2 && !teamLines[j].match(/^\d+\.\d+$/)) {
+                        // This looks like a team name, not a number
+                        if (teamBIndex === -1) {
+                            teamB = cleanTeamName(teamLines[j]);
+                            teamBIndex = j;
+                        }
                     }
-                }
-                // Next non-empty line should be Team B
-                let teamB = '';
-                while (i < lines.length && !teamB) {
-                    const candidate = lines[i].trim();
-                    if (candidate && !/\d+\.\d+/.test(candidate)) {
-                        teamB = cleanTeamName(candidate);
-                        i++;
-                        break;
-                    }
-                    i++;
                 }
 
-                if (teamA && teamB && teamA !== teamB && odds.length >= 2) {
+                // If we didn't find a teamB in the collected lines, look ahead
+                if (!teamB && i < lines.length) {
+                    // Look ahead for next non-blank, non-numeric, non-header line
+                    let k = i;
+                    while (k < lines.length) {
+                        const next = lines[k].trim();
+                        if (next.length > 2 && !next.match(/^\d+\.\d+$/) && 
+                            !/(Division|League|Cup|Tomorrow|in \d+h)/i.test(next)) {
+                            teamB = cleanTeamName(next);
+                            i = k + 1; // Skip past it
+                            break;
+                        }
+                        k++;
+                    }
+                }
+
+                if (teamA && teamB && teamA !== teamB) {
                     parsed.push({
                         home: teamA,
                         away: teamB,
@@ -546,12 +572,12 @@ function parsePastedData() {
                         pd: odds[1] || '',
                         pa: odds[2] || ''
                     });
-                    continue;
                 }
             }
+            continue;
         }
 
-        // Fallback: Try inline patterns
+        // Fallback: Try inline patterns for other formats
         const t = line;
         let m = null;
 
@@ -612,6 +638,8 @@ function detectLeague(h, a) {
     if (s.includes('europa') && s.includes('conference')) return 'Europa Conference';
     if (s.includes('europa')) return 'Europa League';
     if (s.includes('champions')) return 'Champions League';
+    if (s.includes('republic of ireland') || s.includes('athlone') || s.includes('cork') || s.includes('dundalk') || s.includes('bray') || s.includes('waterford')) return 'LOI';
+    if (s.includes('brazil') || s.includes('serie b') || s.includes('juventude') || s.includes('vila nova') || s.includes('sport recife') || s.includes('botafogo')) return 'Serie B';
     return 'EPL';
 }
 
@@ -693,12 +721,17 @@ function getInputFloat(id, fallback) {
 function addMatch(home="", away="", league="EPL", ph="", pd="", pa="", mh="", md="", ma="", hgs="", hgc="", ags="", agc="") {
     matchCounter++;
     const id = `m${matchCounter}`;
+    const hasOdds = ph && pd && pa;
+    const missingOddsStyle = hasOdds ? '' : 'border: 1px solid rgba(233,69,96,0.5);';
+    const missingOddsBadge = hasOdds ? '' : '<span style="background:#e94560;color:white;padding:2px 8px;border-radius:10px;font-size:0.7em;margin-left:8px;">⚠️ Missing Odds</span>';
+
     const div = document.createElement('div');
     div.className = 'match-card';
     div.id = `match_${id}`;
+    div.style.cssText = missingOddsStyle;
     div.innerHTML = `
         <div class="match-header">
-            <span class="match-title">Match ${matchCounter}</span>
+            <span class="match-title">Match ${matchCounter}${missingOddsBadge}</span>
             <span class="match-id">ID: ${id}</span>
             <button class="btn btn-gray btn-small" onclick="removeMatch('${id}')">✕</button>
         </div>
@@ -709,9 +742,9 @@ function addMatch(home="", away="", league="EPL", ph="", pd="", pa="", mh="", md
         <input type="text" id="league_${id}" placeholder="League" value="${league}" style="margin-top:8px;">
         <label style="margin-top:10px;">Pool Odds (H / D / A)</label>
         <div class="odds-row">
-            <input type="number" step="0.01" id="ph_${id}" placeholder="H" value="${ph}">
-            <input type="number" step="0.01" id="pd_${id}" placeholder="D" value="${pd}">
-            <input type="number" step="0.01" id="pa_${id}" placeholder="A" value="${pa}">
+            <input type="number" step="0.01" id="ph_${id}" placeholder="H" value="${ph}" style="${!ph ? 'border-color:#e94560;' : ''}">
+            <input type="number" step="0.01" id="pd_${id}" placeholder="D" value="${pd}" style="${!pd ? 'border-color:#e94560;' : ''}">
+            <input type="number" step="0.01" id="pa_${id}" placeholder="A" value="${pa}" style="${!pa ? 'border-color:#e94560;' : ''}">
         </div>
         <label>Market Odds (H / D / A) - Optional</label>
         <div class="odds-row">
