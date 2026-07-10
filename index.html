@@ -169,6 +169,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
     word-break: break-word;
 }
 </style>
+<base target="_blank">
 </head>
 <body>
 
@@ -187,6 +188,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
         <button class="btn btn-purple" onclick="document.getElementById('importFile').click()">📥 Import</button>
         <input type="file" id="importFile" class="hidden" accept=".json" onchange="importData(this)">
     </div>
+    <button class="btn btn-orange" onclick="showSavedTickets()" style="margin-top:8px;">🎫 View Saved Tickets</button>
+    <div id="savedTicketsList" style="margin-top:10px;display:none;"></div>
 </div>
 
 <!-- SMART PASTE -->
@@ -208,7 +211,7 @@ Or just paste raw text from Interbet page"></textarea>
     <button class="btn btn-orange" onclick="parsePastedData()">🧠 Parse & Fill Matches</button>
     <button class="btn btn-gray" onclick="document.getElementById('pasteInput').value=''" style="margin-top:6px;">Clear</button>
     <p class="hint">
-        💡 <strong>Tip:</strong> Include team names and odds. The parser handles various formats.
+        💡 <strong>Tip:</strong> Include team names and odds. The parser handles various formats including raw Interbet copy-paste.
     </p>
 </div>
 
@@ -224,6 +227,29 @@ Or just paste raw text from Interbet page"></textarea>
     <p class="hint">
         💡 The AI will return goals scored/conceded averages. Paste the response back into each match's form fields.
     </p>
+</div>
+
+<!-- FORM DATA PASTE -->
+<div class="card">
+    <div class="section-title">📋 Paste Form Data</div>
+    <p style="color:#aaa;font-size:0.85em;margin-bottom:10px;">
+        Paste the AI response here. Handles messy copy-paste with links, % chars, and squished text.
+    </p>
+    <div class="paste-box">
+        <textarea id="formDataInput" placeholder="Paste AI response here...
+
+Works with:
+- [FRANCE](link): GS=2.4, GC=0.4
+- FRANCE: GS=2.4, GC=0.4
+- Squished: FRANCE: GS=2.4, GC=0.4MOROCCO: GS=2.2..."></textarea>
+    </div>
+    <div class="grid-2">
+        <button class="btn btn-orange" onclick="parseFormData()">🧠 Auto-Fill Form Fields</button>
+        <button class="btn btn-blue" onclick="previewFormData()">👁️ Preview Parse</button>
+    </div>
+    <button class="btn btn-gray" onclick="document.getElementById('formDataInput').value='';document.getElementById('formPreview').style.display='none';" style="margin-top:6px;">Clear</button>
+    <div id="formPreview" style="margin-top:10px;padding:10px;background:rgba(74,144,217,0.1);border-radius:8px;display:none;font-size:0.85em;border:1px solid rgba(74,144,217,0.3);"></div>
+    <div id="formFillStatus" style="margin-top:10px;padding:10px;background:rgba(45,138,78,0.1);border-radius:8px;display:none;font-size:0.85em;"></div>
 </div>
 
 <!-- POOL CONFIG -->
@@ -289,12 +315,42 @@ Or just paste raw text from Interbet page"></textarea>
 <!-- TICKETS -->
 <div id="ticketsSection" class="card hidden">
     <div class="section-title">🎫 Tickets</div>
+    <div class="grid-2" style="margin-bottom:10px;">
+        <button class="btn btn-blue" onclick="copyTicketToClipboard()">📋 Copy Ticket</button>
+        <button class="btn btn-green" onclick="shareTicket()">📤 Share</button>
+    </div>
     <div id="ticketsList"></div>
 </div>
 
 <!-- LEARNING -->
 <div class="card">
     <div class="section-title">🧠 Learning</div>
+
+    <!-- BULK PASTE PARSER -->
+    <div style="background:rgba(0,0,0,0.2);border-radius:10px;padding:12px;margin-bottom:12px;border:1px solid rgba(142,68,173,0.3);">
+        <p style="color:#aaa;font-size:0.85em;margin-bottom:8px;">
+            <strong>📋 Bulk Paste Results</strong> — Paste Soccer 13 results from Interbet. Auto-records all outcomes.
+        </p>
+        <div class="paste-box" style="margin-bottom:8px;">
+            <textarea id="resultsPasteInput" placeholder="Paste results here...
+
+Example format:
+M1	Brazil	1-2	Norway
+M2	Mexico	2-3	England
+...
+Winning Combination: 3/3/3/3/1/3/3/2/3/2/2/1/1
+
+Or just paste the full Interbet results page"></textarea>
+        </div>
+        <div class="grid-2">
+            <button class="btn btn-orange" onclick="parseResultsBulk()">🧠 Parse & Record All</button>
+            <button class="btn btn-gray" onclick="document.getElementById('resultsPasteInput').value=''">Clear</button>
+        </div>
+        <div id="bulkResultsStatus" style="margin-top:8px;padding:8px;background:rgba(45,138,78,0.1);border-radius:8px;display:none;font-size:0.85em;"></div>
+    </div>
+
+    <!-- MANUAL SINGLE ENTRY -->
+    <p style="color:#888;font-size:0.8em;margin-bottom:8px;text-align:center;">— or enter manually —</p>
     <div class="grid-2">
         <div>
             <label>Match ID</label>
@@ -303,9 +359,9 @@ Or just paste raw text from Interbet page"></textarea>
         <div>
             <label>Result</label>
             <select id="actualResult">
-                <option value="H">Home Win</option>
-                <option value="D">Draw</option>
-                <option value="A">Away Win</option>
+                <option value="H">Home Win (1)</option>
+                <option value="D">Draw (2)</option>
+                <option value="A">Away Win (3)</option>
             </select>
         </div>
     </div>
@@ -360,29 +416,37 @@ let modelWeights = { poisson: 0.35, elo: 0.35, market: 0.30 };
 let teamRatings = {}, outcomes = [];
 let currentPrompt = '';
 
+// Store match data in memory so we don't depend on DOM for learning
+let matchDataStore = {};
+
 function loadFromStorage() {
     const saved = localStorage.getItem('poolAnalyzerData');
     if (saved) {
-        const data = JSON.parse(saved);
-        if (data.teamRatings) teamRatings = data.teamRatings;
-        if (data.outcomes) outcomes = data.outcomes;
-        if (data.modelWeights) {
-            modelWeights = data.modelWeights;
-            document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson * 100);
-            document.getElementById('eloWeight').value = Math.round(modelWeights.elo * 100);
-            document.getElementById('marketWeight').value = Math.round(modelWeights.market * 100);
-            updateWeight('poisson', Math.round(modelWeights.poisson * 100));
-            updateWeight('elo', Math.round(modelWeights.elo * 100));
-            updateWeight('market', Math.round(modelWeights.market * 100));
-        }
-        updateStats();
+        try {
+            const data = JSON.parse(saved);
+            if (data.teamRatings) teamRatings = data.teamRatings;
+            if (data.outcomes) outcomes = data.outcomes;
+            if (data.matchDataStore) matchDataStore = data.matchDataStore;
+            if (data.modelWeights) {
+                modelWeights = data.modelWeights;
+                document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson * 100);
+                document.getElementById('eloWeight').value = Math.round(modelWeights.elo * 100);
+                document.getElementById('marketWeight').value = Math.round(modelWeights.market * 100);
+                updateWeight('poisson', Math.round(modelWeights.poisson * 100));
+                updateWeight('elo', Math.round(modelWeights.elo * 100));
+                updateWeight('market', Math.round(modelWeights.market * 100));
+            }
+            updateStats();
+        } catch (e) { console.error('Load error', e); }
     }
 }
+
 function saveToStorage() {
     localStorage.setItem('poolAnalyzerData', JSON.stringify({
-        teamRatings, outcomes, modelWeights, savedAt: new Date().toISOString()
+        teamRatings, outcomes, modelWeights, matchDataStore, savedAt: new Date().toISOString()
     }));
 }
+
 function toast(msg) {
     const existing = document.querySelector('.toast');
     if (existing) existing.remove();
@@ -394,26 +458,109 @@ function toast(msg) {
 }
 
 // ============================================================
-// SMART PASTE
+// SMART PASTE - FIXED: Handles raw Interbet format
 // ============================================================
+
+
+function showSavedTickets() {
+    const list = document.getElementById('savedTicketsList');
+    const saved = JSON.parse(localStorage.getItem('poolAnalyzerTickets') || '[]');
+
+    if (saved.length === 0) {
+        list.innerHTML = '<div style="color:#888;font-size:0.85em;text-align:center;padding:12px;">No saved tickets yet</div>';
+        list.style.display = 'block';
+        return;
+    }
+
+    let html = '<div style="max-height:300px;overflow-y:auto;">';
+    saved.reverse().forEach((t, i) => {
+        const date = new Date(t.generatedAt).toLocaleString();
+        html += '<div style="background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;margin-bottom:8px;font-size:0.8em;">';
+        html += '<div style="color:#e94560;font-weight:700;">' + t.roundName + ' — ' + t.poolType + '</div>';
+        html += '<div style="color:#666;font-size:0.75em;">' + date + '</div>';
+        html += '<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">';
+        t.matches.forEach(m => {
+            const badge = m.isValue ? '💎' : '';
+            html += '<div style="background:rgba(255,255,255,0.05);padding:4px 6px;border-radius:4px;">';
+            html += m.home + ' v ' + m.away + '<br>';
+            html += '<span style="color:#e94560;font-weight:700;">' + m.pick + badge + '</span>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+    });
+    html += '</div>';
+
+    list.innerHTML = html;
+    list.style.display = list.style.display === 'none' ? 'block' : 'none';
+}
 
 function parsePastedData() {
     const text = document.getElementById('pasteInput').value.trim();
     if (!text) { toast('Paste something first!'); return; }
-    
-    const lines = text.split('\n').filter(l => l.trim().length > 5);
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     const parsed = [];
-    
-    for (const line of lines) {
-        const t = line.trim();
+
+    // Try Interbet raw format first (league header, teamA, odds1, odds2, odds3, teamB)
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Detect league/competition header
+        const isLeagueHeader = /(World Cup|League|Cup|Conference|Europa|Champions|Premier|Bundesliga|La Liga|Serie|Ligue)/i.test(line);
+
+        if (isLeagueHeader) {
+            i++;
+            // Look for: TeamA (newline) odd1 (newline) odd2 (newline) odd3 (newline) TeamB
+            if (i < lines.length) {
+                const teamA = cleanTeamName(lines[i]);
+                i++;
+                const odds = [];
+                // Collect up to 3 numeric odds
+                while (i < lines.length && odds.length < 3) {
+                    const val = parseFloat(lines[i]);
+                    if (!isNaN(val) && val > 1 && val < 100) {
+                        odds.push(val.toFixed(2));
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                // Next non-empty line should be Team B
+                let teamB = '';
+                while (i < lines.length && !teamB) {
+                    const candidate = lines[i].trim();
+                    if (candidate && !/\d+\.\d+/.test(candidate)) {
+                        teamB = cleanTeamName(candidate);
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+
+                if (teamA && teamB && teamA !== teamB && odds.length >= 2) {
+                    parsed.push({
+                        home: teamA,
+                        away: teamB,
+                        ph: odds[0] || '',
+                        pd: odds[1] || '',
+                        pa: odds[2] || ''
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // Fallback: Try inline patterns
+        const t = line;
         let m = null;
-        
+
         // Pattern: "1. Team A vs Team B (H:3.5 D:3.2 A:2.1)"
         let r = t.match(/(?:^|\s)(?:\d+[.\)]?\s*)?(.+?)\s+(?:vs|v\.|against|\-)\s+(.+?)(?:\s*[(\[]?\s*H\s*[:=]\s*([\d.]+)[\s/;,]*D\s*[:=]\s*([\d.]+)[\s/;,]*A\s*[:=]\s*([\d.]+))?/i);
         if (r && r[1] && r[2]) {
             m = { home: clean(r[1]), away: clean(r[2]), ph: r[3]||'', pd: r[4]||'', pa: r[5]||'' };
         }
-        
+
         // Pattern: "Team A - Team B 2.10 3.20 3.50"
         if (!m) {
             r = t.match(/(.+?)(?:\s*[-—]\s*)(.+?)(?:\s+([\d.]+)\s+([\d.]+)\s+([\d.]+))\s*$/);
@@ -421,18 +568,19 @@ function parsePastedData() {
                 m = { home: clean(r[1]), away: clean(r[2]), ph: r[3], pd: r[4], pa: r[5] };
             }
         }
-        
+
         // Pattern: Just "Team A vs Team B"
         if (!m) {
             r = t.match(/(.+?)\s+(?:vs|v\.|against)\s+(.+)/i);
             if (r) m = { home: clean(r[1]), away: clean(r[2]), ph: '', pd: '', pa: '' };
         }
-        
+
         if (m && m.home.length > 2 && m.away.length > 2) parsed.push(m);
+        i++;
     }
-    
+
     if (parsed.length === 0) { toast('❌ Could not parse. Try: "Team A vs Team B"'); return; }
-    
+
     clearAll();
     parsed.forEach(p => addMatch(p.home, p.away, detectLeague(p.home, p.away), p.ph, p.pd, p.pa, '', '', '', '', '', '', ''));
     toast(`✅ Parsed ${parsed.length} matches!`);
@@ -442,6 +590,16 @@ function parsePastedData() {
 function clean(s) {
     return s.replace(/^[\d.\)\-\s]+/, '').replace(/\s+/g, ' ').replace(/\(.*?\)/g, '').trim();
 }
+
+function cleanTeamName(s) {
+    // Remove odds-like numbers, clean whitespace, remove common suffixes
+    return s.replace(/^[\d.\s]+/, '')
+            .replace(/\s+/g, ' ')
+            .replace(/\(.*?\)/g, '')
+            .replace(/^(Win|Draw|Loss|Form|Team\s*[AB])\s*/i, '')
+            .trim();
+}
+
 function detectLeague(h, a) {
     const s = (h + ' ' + a).toLowerCase();
     if (s.includes('manchester') || s.includes('liverpool') || s.includes('arsenal') || s.includes('chelsea') || s.includes('tottenham')) return 'EPL';
@@ -450,32 +608,38 @@ function detectLeague(h, a) {
     if (s.includes('juventus') || s.includes('milan') || s.includes('inter') || s.includes('napoli') || s.includes('roma')) return 'Serie A';
     if (s.includes('psg') || s.includes('lyon') || s.includes('marseille')) return 'Ligue 1';
     if (s.includes('sundowns') || s.includes('pirates') || s.includes('chiefs') || s.includes('supersport')) return 'PSL';
+    if (s.includes('france') || s.includes('morocco') || s.includes('world cup')) return 'World Cup';
+    if (s.includes('europa') && s.includes('conference')) return 'Europa Conference';
+    if (s.includes('europa')) return 'Europa League';
+    if (s.includes('champions')) return 'Champions League';
     return 'EPL';
 }
 
 // ============================================================
-// PROMPT CREATOR
+// PROMPT CREATOR - FIXED: Updated season reference
 // ============================================================
 
 function generatePrompt() {
     if (matches.length === 0) { toast('Add matches first!'); return; }
-    
+
     let prompt = `I need recent form data for soccer matches. For each team below, provide their average goals scored and goals conceded per game over their LAST 5 MATCHES in their current league.\n\nFormat your response EXACTLY like this for each team:\nTeam Name: GS=X.X, GC=X.X\n\nWhere GS = goals scored average, GC = goals conceded average.\n\nTeams I need data for:\n`;
-    
+
     const teams = new Set();
     matches.forEach(m => {
-        const h = document.getElementById(`home_${m}`).value;
-        const a = document.getElementById(`away_${m}`).value;
-        if (h) teams.add(h);
-        if (a) teams.add(a);
+        const h = document.getElementById(`home_${m}`);
+        const a = document.getElementById(`away_${m}`);
+        if (h && h.value) teams.add(h.value);
+        if (a && a.value) teams.add(a.value);
     });
-    
+
+    if (teams.size === 0) { toast('No team names found'); return; }
+
     teams.forEach(t => { prompt += `- ${t}\n`; });
-    
-    prompt += `\nPlease be precise. Use data from the current 2025/2026 season only. If you cannot find exact data, estimate based on recent performance. Return ONLY the formatted lines, no extra text.`;
-    
+
+    prompt += `\nPlease be precise. Use data from the current 2026 season. If you cannot find exact data, estimate based on recent performance. Return ONLY the formatted lines, no extra text.`;
+
     currentPrompt = prompt;
-    
+
     const out = document.getElementById('promptOutput');
     out.textContent = prompt;
     out.classList.remove('hidden');
@@ -499,7 +663,7 @@ function copyPrompt() {
 }
 
 // ============================================================
-// CORE FUNCTIONS
+// CORE FUNCTIONS - FIXED: Null checks, DOM safety, data storage
 // ============================================================
 
 function init() {
@@ -512,6 +676,18 @@ function init() {
         };
     }
     updateStats();
+}
+
+function getInputVal(id, fallback) {
+    const el = document.getElementById(id);
+    return el ? (el.value || fallback) : fallback;
+}
+
+function getInputFloat(id, fallback) {
+    const el = document.getElementById(id);
+    if (!el || !el.value) return fallback;
+    const v = parseFloat(el.value);
+    return isNaN(v) ? fallback : v;
 }
 
 function addMatch(home="", away="", league="EPL", ph="", pd="", pa="", mh="", md="", ma="", hgs="", hgc="", ags="", agc="") {
@@ -553,18 +729,28 @@ function addMatch(home="", away="", league="EPL", ph="", pd="", pa="", mh="", md
     `;
     document.getElementById('matchesContainer').appendChild(div);
     matches.push(id);
+
+    // Store match data for learning (doesn't depend on DOM)
+    matchDataStore[id] = { home, away, league, ph, pd, pa, hgs, hgc, ags, agc };
+    saveToStorage();
 }
 
 function removeMatch(id) {
     const el = document.getElementById(`match_${id}`);
     if (el) el.remove();
     matches = matches.filter(m => m !== id);
+    delete matchDataStore[id];
+    saveToStorage();
 }
+
 function clearAll() {
     if (matches.length > 0 && !confirm('Clear all matches?')) return;
     document.getElementById('matchesContainer').innerHTML = '';
     matches = []; matchCounter = 0;
+    matchDataStore = {};
+    saveToStorage();
 }
+
 function updateWeight(type, val) {
     document.getElementById(type + 'Display').textContent = val + '%';
     modelWeights[type] = parseInt(val) / 100;
@@ -574,10 +760,12 @@ function factorial(n) { return n <= 1 ? 1 : n * factorial(n-1); }
 function poissonP(l, k) { return Math.exp(-l) * Math.pow(l, k) / factorial(k); }
 
 function poissonModel(m) {
-    const hgs = parseFloat(document.getElementById(`hgs_${m}`).value) || 1.5;
-    const hgc = parseFloat(document.getElementById(`hgc_${m}`).value) || 1.2;
-    const ags = parseFloat(document.getElementById(`ags_${m}`).value) || 1.3;
-    const agc = parseFloat(document.getElementById(`agc_${m}`).value) || 1.1;
+    // Use stored data if DOM element missing
+    const stored = matchDataStore[m] || {};
+    const hgs = getInputFloat(`hgs_${m}`, parseFloat(stored.hgs) || 1.5);
+    const hgc = getInputFloat(`hgc_${m}`, parseFloat(stored.hgc) || 1.2);
+    const ags = getInputFloat(`ags_${m}`, parseFloat(stored.ags) || 1.3);
+    const agc = getInputFloat(`agc_${m}`, parseFloat(stored.agc) || 1.1);
     const lH = Math.max((hgs + agc) / 2 * 1.36, 0.5);
     const lA = Math.max((ags + hgc) / 2, 0.3);
     let pH = 0, pD = 0, pA = 0;
@@ -592,8 +780,10 @@ function poissonModel(m) {
 }
 
 function eloModel(m) {
-    const home = document.getElementById(`home_${m}`).value;
-    const away = document.getElementById(`away_${m}`).value;
+    const stored = matchDataStore[m] || {};
+    const home = getInputVal(`home_${m}`, stored.home || '');
+    const away = getInputVal(`away_${m}`, stored.away || '');
+    if (!home || !away) return { H: 0.33, D: 0.33, A: 0.33 };
     const hR = teamRatings[home] || 1500;
     const aR = teamRatings[away] || 1500;
     const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
@@ -606,9 +796,10 @@ function eloModel(m) {
 }
 
 function marketModel(m) {
-    const mh = parseFloat(document.getElementById(`mh_${m}`).value);
-    const md = parseFloat(document.getElementById(`md_${m}`).value);
-    const ma = parseFloat(document.getElementById(`ma_${m}`).value);
+    const stored = matchDataStore[m] || {};
+    const mh = getInputFloat(`mh_${m}`, parseFloat(stored.mh) || 0);
+    const md = getInputFloat(`md_${m}`, parseFloat(stored.md) || 0);
+    const ma = getInputFloat(`ma_${m}`, parseFloat(stored.ma) || 0);
     if (!mh || !md || !ma) return { H: 0.33, D: 0.33, A: 0.33 };
     const rH = 1/mh, rD = 1/md, rA = 1/ma, or = rH + rD + rA;
     return { H: rH/or, D: rD/or, A: rA/or };
@@ -626,9 +817,10 @@ function combinedModel(m) {
 }
 
 function calcValue(m, c) {
-    const ph = parseFloat(document.getElementById(`ph_${m}`).value);
-    const pd = parseFloat(document.getElementById(`pd_${m}`).value);
-    const pa = parseFloat(document.getElementById(`pa_${m}`).value);
+    const stored = matchDataStore[m] || {};
+    const ph = getInputFloat(`ph_${m}`, parseFloat(stored.ph) || 0);
+    const pd = getInputFloat(`pd_${m}`, parseFloat(stored.pd) || 0);
+    const pa = getInputFloat(`pa_${m}`, parseFloat(stored.pa) || 0);
     if (!ph || !pd || !pa) return null;
     const rH = 1/ph, rD = 1/pd, rA = 1/pa, or = rH + rD + rA;
     const poolP = { H: rH/or, D: rD/or, A: rA/or };
@@ -645,8 +837,9 @@ function runAnalysis() {
     const valueOps = [];
     const recommendations = {};
     matches.forEach(m => {
-        const home = document.getElementById(`home_${m}`).value;
-        const away = document.getElementById(`away_${m}`).value;
+        const stored = matchDataStore[m] || {};
+        const home = getInputVal(`home_${m}`, stored.home || 'Home');
+        const away = getInputVal(`away_${m}`, stored.away || 'Away');
         const c = combinedModel(m);
         const v = calcValue(m, c);
         const best = ['H','D','A'].reduce((a,b) => c[a] > c[b] ? a : b);
@@ -693,7 +886,9 @@ function generateTickets() {
     list.innerHTML = '';
     const vs = {};
     matches.forEach(m => {
-        const vo = valueOps.find(v => v.match.includes(document.getElementById(`home_${m}`).value));
+        const stored = matchDataStore[m] || {};
+        const h = getInputVal(`home_${m}`, stored.home || '');
+        const vo = valueOps.find(v => v.match.includes(h));
         vs[m] = vo ? vo.sel : recommendations[m];
     });
     const fee = document.getElementById('poolType').value === 'Soccer6' ? 6 : 2;
@@ -702,7 +897,9 @@ function generateTickets() {
             <h3 style="color:#2d8a4e;font-size:0.95em;margin-bottom:10px;">🎯 Value Ticket</h3>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
                 ${matches.map(m => {
-                    const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
+                    const stored = matchDataStore[m] || {};
+                    const h = getInputVal(`home_${m}`, stored.home || 'Home');
+                    const a = getInputVal(`away_${m}`, stored.away || 'Away');
                     const isV = valueOps.some(v => v.match.includes(h));
                     return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;${isV?'border:1px solid #2d8a4e;':''}">
                         <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
@@ -717,7 +914,9 @@ function generateTickets() {
             <h3 style="color:#4a90d9;font-size:0.95em;margin-bottom:10px;">⭐ Confidence Ticket</h3>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
                 ${matches.map(m => {
-                    const h = document.getElementById(`home_${m}`).value, a = document.getElementById(`away_${m}`).value;
+                    const stored = matchDataStore[m] || {};
+                    const h = getInputVal(`home_${m}`, stored.home || 'Home');
+                    const a = getInputVal(`away_${m}`, stored.away || 'Away');
                     return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;">
                         <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
                         <div style="font-weight:700;">${recommendations[m]}</div>
@@ -727,25 +926,288 @@ function generateTickets() {
             <div style="text-align:right;color:#e94560;font-weight:700;">Cost: R${fee}</div>
         </div>`;
     document.getElementById('ticketsSection').classList.remove('hidden');
-    toast('🎫 Tickets generated');
+
+    // Auto-save tickets to storage
+    const ticketData = {
+        generatedAt: new Date().toISOString(),
+        poolType: document.getElementById('poolType').value,
+        roundName: document.getElementById('roundName').value,
+        recommendations: recommendations,
+        valueOps: valueOps,
+        matches: matches.map(m => {
+            const stored = matchDataStore[m] || {};
+            return {
+                id: m,
+                home: getInputVal('home_' + m, stored.home || ''),
+                away: getInputVal('away_' + m, stored.away || ''),
+                pick: vs[m] || recommendations[m],
+                isValue: valueOps.some(v => v.match.includes(getInputVal('home_' + m, stored.home || '')))
+            };
+        })
+    };
+    const savedTickets = JSON.parse(localStorage.getItem('poolAnalyzerTickets') || '[]');
+    savedTickets.push(ticketData);
+    localStorage.setItem('poolAnalyzerTickets', JSON.stringify(savedTickets.slice(-50))); // Keep last 50
+    saveToStorage();
+
+    // Build copyable text and store it
+    window.lastTicketText = buildTicketText(ticketData);
+
+    toast('🎫 Tickets generated & saved!');
+}
+
+function buildTicketText(ticketData) {
+    const poolType = ticketData.poolType;
+    const roundName = ticketData.roundName;
+    const date = new Date(ticketData.generatedAt).toLocaleString();
+
+    let text = '⚽ POOL ANALYZER TICKET\n';
+    text += '═══════════════════════\n';
+    text += roundName + ' — ' + poolType + '\n';
+    text += 'Generated: ' + date + '\n';
+    text += '═══════════════════════\n\n';
+
+    // Value Ticket
+    text += '💎 VALUE TICKET\n';
+    text += '───────────────────────\n';
+    ticketData.matches.forEach(m => {
+        const pickLabel = m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3';
+        const valueMark = m.isValue ? ' 💎' : '';
+        text += 'M' + m.id.replace('m','') + ': ' + m.home + ' vs ' + m.away + '\n';
+        text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + valueMark + '\n';
+    });
+    text += '───────────────────────\n';
+    text += 'Cost: R' + (poolType === 'Soccer6' ? '6' : '2') + '\n\n';
+
+    // Confidence Ticket
+    text += '⭐ CONFIDENCE TICKET\n';
+    text += '───────────────────────\n';
+    ticketData.matches.forEach(m => {
+        const pickLabel = m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3';
+        text += 'M' + m.id.replace('m','') + ': ' + m.home + ' vs ' + m.away + '\n';
+        text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + '\n';
+    });
+    text += '───────────────────────\n';
+    text += 'Cost: R' + (poolType === 'Soccer6' ? '6' : '2') + '\n\n';
+
+    // Quick combo line
+    text += 'QUICK COMBO: ';
+    text += ticketData.matches.map(m => m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3').join('/') + '\n';
+    text += '═══════════════════════\n';
+    text += '⚠️ Educational tool. No profit guarantees.';
+
+    return text;
+}
+
+function copyTicketToClipboard() {
+    const text = window.lastTicketText || '';
+    if (!text) { toast('Generate tickets first!'); return; }
+
+    navigator.clipboard.writeText(text).then(() => {
+        toast('📋 Ticket copied!');
+    }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('📋 Ticket copied!');
+    });
+}
+
+function shareTicket() {
+    const text = window.lastTicketText || '';
+    if (!text) { toast('Generate tickets first!'); return; }
+
+    if (navigator.share) {
+        navigator.share({
+            title: 'Pool Analyzer Ticket',
+            text: text
+        }).catch(() => {
+            copyTicketToClipboard();
+        });
+    } else {
+        copyTicketToClipboard();
+    }
+}
+
+// ============================================================
+// LEARNING - FIXED: Safe DOM access, uses stored data
+// ============================================================
+
+
+// ============================================================
+// BULK RESULTS PARSER
+// ============================================================
+
+function parseResultsBulk() {
+    const text = document.getElementById('resultsPasteInput').value.trim();
+    if (!text) { toast('Paste results first!'); return; }
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const results = [];
+    let winningCombo = null;
+
+    // Strategy 1: Look for "Winning Combination: 3/3/3/1/2..." line
+    for (const line of lines) {
+        const comboMatch = line.match(/Winning\s*Combination[:\s]+([123\/\-\s]+)/i);
+        if (comboMatch) {
+            winningCombo = comboMatch[1].replace(/\s/g, '').split(/[\/\-]/).map(s => s.trim());
+            break;
+        }
+    }
+
+    // Strategy 2: Parse individual match lines
+    // Format: M1  Brazil  1-2  Norway  or  M1	Brazil	1-2	Norway
+    for (const line of lines) {
+        // Pattern: M1 [tab/space] TeamA [tab/space] Score [tab/space] TeamB
+        let match = line.match(/^M?(\d+)\s+(.+?)\s+(\d+)[\-:](\d+)\s+(.+)$/i);
+        if (!match) {
+            // Try tab-separated
+            match = line.match(/^M?(\d+)\t(.+?)\t(\d+)[\-:](\d+)\t(.+)$/i);
+        }
+        if (!match) {
+            // Try with dots: M1. Brazil 1-2 Norway
+            match = line.match(/^M?(\d+)[.\)]?\s*(.+?)\s+(\d+)[\-:](\d+)\s+(.+)$/i);
+        }
+        if (match) {
+            const matchNum = parseInt(match[1]);
+            const teamA = match[2].trim();
+            const scoreA = parseInt(match[3]);
+            const scoreB = parseInt(match[4]);
+            const teamB = match[5].trim();
+
+            let result;
+            if (scoreA > scoreB) result = 'H';
+            else if (scoreA === scoreB) result = 'D';
+            else result = 'A';
+
+            results.push({ matchNum, teamA, teamB, scoreA, scoreB, result });
+        }
+    }
+
+    // Strategy 3: If we have winning combo but no individual lines, use combo directly
+    if (results.length === 0 && winningCombo && winningCombo.length > 0) {
+        for (let i = 0; i < winningCombo.length; i++) {
+            const val = winningCombo[i];
+            let result;
+            if (val === '1') result = 'H';
+            else if (val === '2') result = 'D';
+            else if (val === '3') result = 'A';
+            else continue;
+            results.push({ matchNum: i + 1, result, fromCombo: true });
+        }
+    }
+
+    if (results.length === 0) {
+        toast('❌ Could not parse results. Try: M1 Brazil 1-2 Norway');
+        return;
+    }
+
+    // Now match results to our matches and record outcomes
+    let recorded = 0;
+    let statusHtml = '<strong>✅ Recorded ' + results.length + ' results:</strong><br>';
+
+    for (const res of results) {
+        // Find matching match in our pool
+        let bestMatch = null;
+        let bestScore = 0;
+
+        for (const m of matches) {
+            const stored = matchDataStore[m] || {};
+            const home = getInputVal('home_' + m, stored.home || '');
+            const away = getInputVal('away_' + m, stored.away || '');
+
+            if (!home || !away) continue;
+
+            const homeNorm = normalizeTeamName(home);
+            const awayNorm = normalizeTeamName(away);
+
+            let score = 0;
+            if (res.teamA) {
+                const teamANorm = normalizeTeamName(res.teamA);
+                const teamBNorm = normalizeTeamName(res.teamB);
+                if (homeNorm === teamANorm || homeNorm.includes(teamANorm) || teamANorm.includes(homeNorm) || fuzzyMatch(homeNorm, teamANorm)) score += 2;
+                if (awayNorm === teamBNorm || awayNorm.includes(teamBNorm) || teamBNorm.includes(awayNorm) || fuzzyMatch(awayNorm, teamBNorm)) score += 2;
+            }
+
+            // Also check by match number position
+            const matchIndex = matches.indexOf(m);
+            if (res.matchNum === matchIndex + 1) score += 1;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = m;
+            }
+        }
+
+        if (bestMatch && bestScore >= 1) {
+            // Record the outcome
+            const stored = matchDataStore[bestMatch] || {};
+            const home = getInputVal('home_' + bestMatch, stored.home || '');
+            const away = getInputVal('away_' + bestMatch, stored.away || '');
+
+            outcomes.push({ mid: bestMatch, res: res.result, home, away, time: new Date().toISOString() });
+
+            // Update Elo ratings
+            const hR = teamRatings[home] || 1500;
+            const aR = teamRatings[away] || 1500;
+            const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
+            const aH = res.result === 'H' ? 1 : res.result === 'D' ? 0.5 : 0;
+            const k = 20;
+            teamRatings[home] = hR + k * (aH - eH);
+            teamRatings[away] = aR + k * ((1 - aH) - (1 - eH));
+
+            recorded++;
+            const label = res.result === 'H' ? '1 (Home)' : res.result === 'D' ? '2 (Draw)' : '3 (Away)';
+            statusHtml += 'M' + res.matchNum + ' → ' + label + ' (' + (home || '?') + ' v ' + (away || '?') + ')<br>';
+        } else {
+            const label = res.result === 'H' ? '1' : res.result === 'D' ? '2' : '3';
+            statusHtml += '<span style="color:#e94560;">M' + res.matchNum + ' → ' + label + ' (no match found)</span><br>';
+        }
+    }
+
+    saveToStorage();
+
+    const statusDiv = document.getElementById('bulkResultsStatus');
+    statusDiv.innerHTML = statusHtml;
+    statusDiv.style.display = 'block';
+
+    updateStats();
+    toast('✅ Recorded ' + recorded + ' outcomes!');
+    document.getElementById('resultsPasteInput').value = '';
 }
 
 function recordOutcome() {
-    const mid = document.getElementById('learnMatchId').value;
+    const mid = document.getElementById('learnMatchId').value.trim();
     const res = document.getElementById('actualResult').value;
     if (!mid) { toast('Enter Match ID'); return; }
-    outcomes.push({ mid, res, time: new Date().toISOString() });
-    const el = document.getElementById(`match_${mid}`);
-    if (el) {
-        const h = document.getElementById(`home_${mid}`).value;
-        const a = document.getElementById(`away_${mid}`).value;
-        const hR = teamRatings[h] || 1500, aR = teamRatings[a] || 1500;
-        const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
-        const aH = res === 'H' ? 1 : res === 'D' ? 0.5 : 0;
-        const k = 20;
-        teamRatings[h] = hR + k * (aH - eH);
-        teamRatings[a] = aR + k * ((1 - aH) - (1 - eH));
+
+    const stored = matchDataStore[mid];
+    let home = '', away = '';
+
+    if (stored && stored.home && stored.away) {
+        home = stored.home;
+        away = stored.away;
+    } else {
+        const hEl = document.getElementById(`home_${mid}`);
+        const aEl = document.getElementById(`away_${mid}`);
+        if (hEl) home = hEl.value;
+        if (aEl) away = aEl.value;
     }
+
+    if (!home || !away) { toast('Match not found or missing team data'); return; }
+
+    outcomes.push({ mid, res, home, away, time: new Date().toISOString() });
+
+    const hR = teamRatings[home] || 1500, aR = teamRatings[away] || 1500;
+    const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
+    const aH = res === 'H' ? 1 : res === 'D' ? 0.5 : 0;
+    const k = 20;
+    teamRatings[home] = hR + k * (aH - eH);
+    teamRatings[away] = aR + k * ((1 - aH) - (1 - eH));
+
     saveToStorage();
     const status = document.getElementById('learningStatus');
     status.style.display = 'block';
@@ -761,15 +1223,24 @@ function selfLearn() {
         s.innerHTML = `⚠️ Need 5+ outcomes. Have: ${outcomes.length}`;
         return;
     }
+
     const recent = outcomes.slice(-20);
     let pC = 0, eC = 0, mC = 0;
+
     recent.forEach(o => {
-        const p = poissonModel(o.mid), e = eloModel(o.mid), m = marketModel(o.mid);
+        // Check if match data exists (in store or DOM)
+        const hasData = matchDataStore[o.mid] || document.getElementById(`home_${o.mid}`);
+        if (!hasData) return; // Skip if match data no longer available
+
+        const p = poissonModel(o.mid);
+        const e = eloModel(o.mid);
+        const m = marketModel(o.mid);
         const pB = Object.keys(p).reduce((a,b) => p[a] > p[b] ? a : b);
         const eB = Object.keys(e).reduce((a,b) => e[a] > e[b] ? a : b);
         const mB = Object.keys(m).reduce((a,b) => m[a] > m[b] ? a : b);
         if (pB === o.res) pC++; if (eB === o.res) eC++; if (mB === o.res) mC++;
     });
+
     const t = recent.length;
     const pA = pC/t, eA = eC/t, mA = mC/t, tA = pA + eA + mA;
     if (tA > 0) {
@@ -797,13 +1268,16 @@ function updateStats() {
     document.getElementById('statOutcomes').textContent = outcomes.length;
     document.getElementById('statTeams').textContent = Object.keys(teamRatings).length;
     if (outcomes.length > 0) {
-        let correct = 0;
+        let correct = 0, checked = 0;
         outcomes.forEach(o => {
+            const hasData = matchDataStore[o.mid] || document.getElementById(`home_${o.mid}`);
+            if (!hasData) return;
+            checked++;
             const c = combinedModel(o.mid);
             const best = ['H','D','A'].reduce((a,b) => c[a] > c[b] ? a : b);
             if (best === o.res) correct++;
         });
-        document.getElementById('statAccuracy').textContent = (correct / outcomes.length * 100).toFixed(0) + '%';
+        document.getElementById('statAccuracy').textContent = checked > 0 ? (correct / checked * 100).toFixed(0) + '%' : '--';
     }
 }
 
@@ -811,15 +1285,18 @@ function savePool() {
     const poolData = {
         poolType: document.getElementById('poolType').value,
         roundName: document.getElementById('roundName').value,
-        matches: matches.map(m => ({
-            id: m,
-            home: document.getElementById(`home_${m}`).value,
-            away: document.getElementById(`away_${m}`).value,
-            league: document.getElementById(`league_${m}`).value,
-            poolOdds: { H: document.getElementById(`ph_${m}`).value, D: document.getElementById(`pd_${m}`).value, A: document.getElementById(`pa_${m}`).value },
-            marketOdds: { H: document.getElementById(`mh_${m}`).value, D: document.getElementById(`md_${m}`).value, A: document.getElementById(`ma_${m}`).value },
-            form: { hgs: document.getElementById(`hgs_${m}`).value, hgc: document.getElementById(`hgc_${m}`).value, ags: document.getElementById(`ags_${m}`).value, agc: document.getElementById(`agc_${m}`).value }
-        })),
+        matches: matches.map(m => {
+            const stored = matchDataStore[m] || {};
+            return {
+                id: m,
+                home: getInputVal(`home_${m}`, stored.home || ''),
+                away: getInputVal(`away_${m}`, stored.away || ''),
+                league: getInputVal(`league_${m}`, stored.league || ''),
+                poolOdds: { H: getInputVal(`ph_${m}`, stored.ph || ''), D: getInputVal(`pd_${m}`, stored.pd || ''), A: getInputVal(`pa_${m}`, stored.pa || '') },
+                marketOdds: { H: getInputVal(`mh_${m}`, ''), D: getInputVal(`md_${m}`, ''), A: getInputVal(`ma_${m}`, '') },
+                form: { hgs: getInputVal(`hgs_${m}`, stored.hgs || ''), hgc: getInputVal(`hgc_${m}`, stored.hgc || ''), ags: getInputVal(`ags_${m}`, stored.ags || ''), agc: getInputVal(`agc_${m}`, stored.agc || '') }
+            };
+        }),
         savedAt: new Date().toISOString()
     };
     localStorage.setItem('lastPool', JSON.stringify(poolData));
@@ -830,20 +1307,24 @@ function savePool() {
 function loadLastPool() {
     const saved = localStorage.getItem('lastPool');
     if (!saved) { toast('No saved pool'); return; }
-    const data = JSON.parse(saved);
-    document.getElementById('poolType').value = data.poolType;
-    document.getElementById('roundName').value = data.roundName;
-    clearAll();
-    data.matches.forEach(m => {
-        addMatch(m.home, m.away, m.league, m.poolOdds.H, m.poolOdds.D, m.poolOdds.A,
-                 m.marketOdds.H, m.marketOdds.D, m.marketOdds.A,
-                 m.form.hgs, m.form.hgc, m.form.ags, m.form.agc);
-    });
-    toast('📂 Pool loaded');
+    try {
+        const data = JSON.parse(saved);
+        document.getElementById('poolType').value = data.poolType || 'Soccer6';
+        document.getElementById('roundName').value = data.roundName || 'Week 32';
+        clearAll();
+        if (data.matches && Array.isArray(data.matches)) {
+            data.matches.forEach(m => {
+                addMatch(m.home, m.away, m.league, m.poolOdds.H, m.poolOdds.D, m.poolOdds.A,
+                         m.marketOdds.H, m.marketOdds.D, m.marketOdds.A,
+                         m.form.hgs, m.form.hgc, m.form.ags, m.form.agc);
+            });
+        }
+        toast('📂 Pool loaded');
+    } catch (e) { toast('❌ Failed to load pool'); }
 }
 
 function exportData() {
-    const data = { teamRatings, outcomes, modelWeights, lastPool: localStorage.getItem('lastPool'), exportedAt: new Date().toISOString() };
+    const data = { teamRatings, outcomes, modelWeights, matchDataStore, lastPool: localStorage.getItem('lastPool'), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -863,6 +1344,7 @@ function importData(input) {
             const data = JSON.parse(e.target.result);
             if (data.teamRatings) teamRatings = data.teamRatings;
             if (data.outcomes) outcomes = data.outcomes;
+            if (data.matchDataStore) matchDataStore = data.matchDataStore;
             if (data.modelWeights) {
                 modelWeights = data.modelWeights;
                 document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson * 100);
@@ -876,12 +1358,227 @@ function importData(input) {
             saveToStorage();
             updateStats();
             toast('📥 Imported');
-        } catch (err) { toast('❌ Import failed'); }
+        } catch (err) { toast('❌ Import failed'); console.error(err); }
     };
     reader.readAsText(file);
 }
 
 init();
+
+// ============================================================
+// FORM DATA PASTE PARSER
+// ============================================================
+
+
+function previewFormData() {
+    let text = document.getElementById('formDataInput').value.trim();
+    if (!text) { toast('Paste something first!'); return; }
+
+    // Same cleanup as parseFormData
+    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
+    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
+    text = text.replace(/\s+/g, ' ').trim();
+
+    const teamData = {};
+    const patternA = /([A-Z][A-Z\s'\-]+?):\s*GS=([\d.]+)\s*,?\s*GC=([\d.]+)/g;
+    let match;
+    while ((match = patternA.exec(text)) !== null) {
+        const teamName = match[1].trim();
+        const gs = parseFloat(match[2]);
+        const gc = parseFloat(match[3]);
+        if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
+            teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
+        }
+    }
+
+    const previewDiv = document.getElementById('formPreview');
+    if (Object.keys(teamData).length === 0) {
+        previewDiv.innerHTML = '<strong style="color:#e94560;">❌ No teams parsed.</strong><br>Cleaned text:<br><code style="word-break:break-all;">' + text.substring(0, 200) + (text.length > 200 ? '...' : '') + '</code>';
+        previewDiv.style.display = 'block';
+        return;
+    }
+
+    let html = '<strong>👁️ Preview (' + Object.keys(teamData).length + ' teams found):</strong><br>';
+    for (const [key, data] of Object.entries(teamData)) {
+        html += data.rawName + ': GS=' + data.gs + ', GC=' + data.gc + '<br>';
+    }
+    previewDiv.innerHTML = html;
+    previewDiv.style.display = 'block';
+    toast('👁️ Preview ready - check below');
+}
+
+function parseFormData() {
+    let text = document.getElementById('formDataInput').value.trim();
+    if (!text) { toast('Paste form data first!'); return; }
+
+    // STEP 1: Aggressive cleanup of copy-paste garbage
+    // Remove URL-encoded chars (%20, %3D, etc.)
+    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
+    // Remove markdown links [text](url)
+    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+    // Remove raw URLs
+    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
+    // Normalize all whitespace to single spaces
+    text = text.replace(/\s+/g, ' ').trim();
+
+    const teamData = {};
+
+    // STEP 2: The AI output when squished looks like:
+    // FRANCE: GS=2.4, GC=0.4 MOROCCO: GS=2.2, GC=0.6 VOJVODINA NS: GS=2.4, GC=0.8...
+    // Pattern: TEAM_NAME: GS=NUM, GC=NUM (team name is uppercase words before colon)
+
+    // Strategy A: Find all "TEAM: GS=X.X, GC=X.X" patterns in the single string
+    // Team name = one or more uppercase words (with spaces, apostrophes, hyphens)
+    const patternA = /([A-Z][A-Z\s'\-]+?):\s*GS=([\d.]+)\s*,?\s*GC=([\d.]+)/g;
+    let match;
+    while ((match = patternA.exec(text)) !== null) {
+        const teamName = match[1].trim();
+        const gs = parseFloat(match[2]);
+        const gc = parseFloat(match[3]);
+        if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
+            teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
+        }
+    }
+
+    // Strategy B: If still no matches, try splitting on "GS=" as delimiter
+    if (Object.keys(teamData).length === 0) {
+        const parts = text.split('GS=');
+        for (let i = 1; i < parts.length; i++) {
+            const part = parts[i];
+            // Before this GS= is the team name
+            const prevText = parts[i-1];
+            const teamMatch = prevText.match(/([A-Z][A-Z\s'\-]+?)$/);
+            if (teamMatch) {
+                const teamName = teamMatch[1].trim();
+                const numMatch = part.match(/^([\d.]+)\s*,?\s*GC=([\d.]+)/);
+                if (numMatch) {
+                    const gs = parseFloat(numMatch[1]);
+                    const gc = parseFloat(numMatch[2]);
+                    if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
+                        teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy C: Line-by-line fallback (for properly formatted input)
+    if (Object.keys(teamData).length === 0) {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        for (const line of lines) {
+            let m = line.match(/^(.+?):\s*GS=([\d.]+),?\s*GC=([\d.]+)/i);
+            if (!m) {
+                m = line.match(/^(.+?)\s+GS=([\d.]+)\s+GC=([\d.]+)/i);
+            }
+            if (m) {
+                const teamName = m[1].trim();
+                const gs = parseFloat(m[2]);
+                const gc = parseFloat(m[3]);
+                if (!isNaN(gs) && !isNaN(gc) && teamName.length > 2) {
+                    teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
+                }
+            }
+        }
+    }
+
+    if (Object.keys(teamData).length === 0) { 
+        toast('❌ Could not parse. Try pasting as plain text first.'); 
+        return; 
+    }
+
+    let filled = 0;
+    let statusHtml = '<strong>✅ Parsed ' + Object.keys(teamData).length + ' teams:</strong><br>';
+    let unmatched = [];
+
+    matches.forEach(m => {
+        const homeEl = document.getElementById('home_' + m);
+        const awayEl = document.getElementById('away_' + m);
+        const hgsEl = document.getElementById('hgs_' + m);
+        const hgcEl = document.getElementById('hgc_' + m);
+        const agsEl = document.getElementById('ags_' + m);
+        const agcEl = document.getElementById('agc_' + m);
+
+        if (!homeEl || !awayEl || !homeEl.value || !awayEl.value) return;
+
+        const homeNorm = normalizeTeamName(homeEl.value);
+        const awayNorm = normalizeTeamName(awayEl.value);
+
+        let matchFilled = false;
+        let homeMatched = false;
+        let awayMatched = false;
+
+        // Try exact match first, then fuzzy
+        for (const [key, data] of Object.entries(teamData)) {
+            if (homeNorm === key || homeNorm.includes(key) || key.includes(homeNorm) || 
+                fuzzyMatch(homeNorm, key)) {
+                if (hgsEl) { hgsEl.value = data.gs; matchFilled = true; homeMatched = true; }
+                if (hgcEl) { hgcEl.value = data.gc; matchFilled = true; homeMatched = true; }
+                statusHtml += homeEl.value + ' (H): GS=' + data.gs + ', GC=' + data.gc + '<br>';
+                break;
+            }
+        }
+
+        for (const [key, data] of Object.entries(teamData)) {
+            if (awayNorm === key || awayNorm.includes(key) || key.includes(awayNorm) || 
+                fuzzyMatch(awayNorm, key)) {
+                if (agsEl) { agsEl.value = data.gs; matchFilled = true; awayMatched = true; }
+                if (agcEl) { agcEl.value = data.gc; matchFilled = true; awayMatched = true; }
+                statusHtml += awayEl.value + ' (A): GS=' + data.gs + ', GC=' + data.gc + '<br>';
+                break;
+            }
+        }
+
+        if (matchFilled) filled++;
+        if (!homeMatched) unmatched.push(homeEl.value);
+        if (!awayMatched) unmatched.push(awayEl.value);
+    });
+
+    // Update stored data
+    matches.forEach(m => {
+        const stored = matchDataStore[m] || {};
+        const hgsEl = document.getElementById('hgs_' + m);
+        const hgcEl = document.getElementById('hgc_' + m);
+        const agsEl = document.getElementById('ags_' + m);
+        const agcEl = document.getElementById('agc_' + m);
+        if (hgsEl) stored.hgs = hgsEl.value;
+        if (hgcEl) stored.hgc = hgcEl.value;
+        if (agsEl) stored.ags = agsEl.value;
+        if (agcEl) stored.agc = agcEl.value;
+        matchDataStore[m] = stored;
+    });
+    saveToStorage();
+
+    // Show unmatched teams
+    const uniqueUnmatched = [...new Set(unmatched)].filter(u => u && u.trim());
+    if (uniqueUnmatched.length > 0) {
+        statusHtml += '<br><strong style="color:#e94560;">⚠️ Unmatched:</strong><br>';
+        uniqueUnmatched.forEach(u => { statusHtml += u + '<br>'; });
+    }
+
+    const statusDiv = document.getElementById('formFillStatus');
+    statusDiv.innerHTML = statusHtml;
+    statusDiv.style.display = 'block';
+
+    toast('✅ Auto-filled ' + filled + ' matches!');
+    document.getElementById('formDataInput').value = '';
+}
+
+function normalizeTeamName(name) {
+    return name.toLowerCase()
+        .replace(/fc|fk|nk|hnk|pfc/g, '')
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function fuzzyMatch(a, b) {
+    // Simple fuzzy: check if significant words overlap
+    const wordsA = a.split(' ').filter(w => w.length > 2);
+    const wordsB = b.split(' ').filter(w => w.length > 2);
+    return wordsA.some(wa => wordsB.some(wb => wa === wb || wa.includes(wb) || wb.includes(wa)));
+}
+
 </script>
 </body>
 </html>
