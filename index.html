@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0a0a1a">
-<title>Pool Analyzer</title>
+<title>Pool Analyzer — Decision Engine</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body {
@@ -169,6 +169,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
     word-break: break-word;
 }
 
+
+.metric-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:9px;}
+.metric-box {background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);border-radius:9px;padding:8px;}
+.metric-label {display:block;color:#777;font-size:.72em;margin-bottom:2px;}
+.metric-value {font-size:.86em;font-weight:700;color:#ddd;}
+.decision-note {margin-top:8px;padding:8px 10px;border-radius:8px;font-size:.78em;line-height:1.45;}
+@media (min-width:720px){.metric-grid{grid-template-columns:repeat(4,minmax(0,1fr));}}
+
 /* iOS Safari click fix */
 .btn, button, [onclick] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 </style>
@@ -177,7 +185,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
 <body>
 
 <h1>⚽ Pool Analyzer</h1>
-<p class="subtitle">Soccer 6 · 10 · 13</p>
+<p class="subtitle">Soccer 6 · 10 · 13 · Bayesian Decision Engine</p>
 <div class="warning">⚠️ Educational tool. No profit guarantees.</div>
 
 <!-- SAVE / LOAD -->
@@ -972,15 +980,117 @@ function marketModel(m) {
     return { H: rH/or, D: rD/or, A: rA/or };
 }
 
+function normalizeProbabilities(dist) {
+    const epsilon = 1e-9;
+    const safe = {
+        H: Math.max(Number(dist.H) || 0, epsilon),
+        D: Math.max(Number(dist.D) || 0, epsilon),
+        A: Math.max(Number(dist.A) || 0, epsilon)
+    };
+    const total = safe.H + safe.D + safe.A;
+    return { H: safe.H / total, D: safe.D / total, A: safe.A / total };
+}
+
+function modelWinner(dist) {
+    return ['H', 'D', 'A'].reduce((best, key) => dist[key] > dist[best] ? key : best);
+}
+
+function probabilityEntropy(dist) {
+    const p = normalizeProbabilities(dist);
+    const raw = -['H', 'D', 'A'].reduce((sum, key) => sum + p[key] * Math.log(p[key]), 0);
+    return raw / Math.log(3);
+}
+
+function modelAgreement(models) {
+    const winners = models.map(modelWinner);
+    const counts = winners.reduce((acc, winner) => {
+        acc[winner] = (acc[winner] || 0) + 1;
+        return acc;
+    }, {});
+    const maxVotes = Math.max(...Object.values(counts));
+    return { score: maxVotes / models.length, winners, unanimous: maxVotes === models.length };
+}
+
+function modelDisagreement(models) {
+    let varianceTotal = 0;
+    ['H', 'D', 'A'].forEach(key => {
+        const values = models.map(model => model[key]);
+        const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+        varianceTotal += values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+    });
+    return Math.min(1, Math.sqrt(varianceTotal / 3) * 3);
+}
+
+function bayesianFusion(poisson, elo, market, weights) {
+    const p = normalizeProbabilities(poisson);
+    const e = normalizeProbabilities(elo);
+    const mk = normalizeProbabilities(market);
+    const evidence = {};
+    ['H', 'D', 'A'].forEach(key => {
+        evidence[key] =
+            Math.pow(e[key], weights.elo) *
+            Math.pow(p[key], weights.poisson) *
+            Math.pow(mk[key], weights.market);
+    });
+    return normalizeProbabilities(evidence);
+}
+
+function blendDistributions(primary, secondary, primaryWeight = 0.55) {
+    const secondaryWeight = 1 - primaryWeight;
+    return normalizeProbabilities({
+        H: primary.H * primaryWeight + secondary.H * secondaryWeight,
+        D: primary.D * primaryWeight + secondary.D * secondaryWeight,
+        A: primary.A * primaryWeight + secondary.A * secondaryWeight
+    });
+}
+
+function calculateDecisionMetrics(finalDist, models) {
+    const ordered = ['H', 'D', 'A']
+        .map(key => ({ key, value: finalDist[key] }))
+        .sort((a, b) => b.value - a.value);
+    const best = ordered[0].key;
+    const second = ordered[1].key;
+    const margin = ordered[0].value - ordered[1].value;
+    const entropy = probabilityEntropy(finalDist);
+    const predictability = 1 - entropy;
+    const agreement = modelAgreement(models);
+    const disagreement = modelDisagreement(models);
+    const drawProximity = Math.max(0, 1 - Math.abs(finalDist.D - Math.max(finalDist.H, finalDist.A)) / 0.25);
+    const drawRisk = Math.min(1,
+        0.40 * entropy +
+        0.25 * disagreement +
+        0.20 * (1 - agreement.score) +
+        0.15 * drawProximity
+    );
+
+    let confidenceBand = 'Low';
+    if (margin >= 0.20 && predictability >= 0.35 && agreement.score >= 0.67) confidenceBand = 'High';
+    else if (margin >= 0.10 && predictability >= 0.20) confidenceBand = 'Medium';
+
+    let decisionType = 'Single';
+    if (margin < 0.06 || entropy > 0.93 || disagreement > 0.55) decisionType = 'Avoid / Cover';
+    else if (margin < 0.12 || drawRisk > 0.58 || agreement.score < 0.67) decisionType = 'Cover';
+
+    return { best, second, margin, entropy, predictability, agreement, disagreement, drawRisk, confidenceBand, decisionType };
+}
+
 function combinedModel(m) {
     const p = poissonModel(m), e = eloModel(m), mk = marketModel(m);
-    const tW = modelWeights.poisson + modelWeights.elo + modelWeights.market;
-    const wP = modelWeights.poisson / tW, wE = modelWeights.elo / tW, wM = modelWeights.market / tW;
-    const cH = wP * p.H + wE * e.H + wM * mk.H;
-    const cD = wP * p.D + wE * e.D + wM * mk.D;
-    const cA = wP * p.A + wE * e.A + wM * mk.A;
-    const t = cH + cD + cA;
-    return { H: cH/t, D: cD/t, A: cA/t, poisson: p, elo: e, market: mk };
+    const totalWeight = modelWeights.poisson + modelWeights.elo + modelWeights.market || 1;
+    const weights = {
+        poisson: modelWeights.poisson / totalWeight,
+        elo: modelWeights.elo / totalWeight,
+        market: modelWeights.market / totalWeight
+    };
+    const weightedAverage = normalizeProbabilities({
+        H: weights.poisson * p.H + weights.elo * e.H + weights.market * mk.H,
+        D: weights.poisson * p.D + weights.elo * e.D + weights.market * mk.D,
+        A: weights.poisson * p.A + weights.elo * e.A + weights.market * mk.A
+    });
+    const bayesian = bayesianFusion(p, e, mk, weights);
+    const final = blendDistributions(bayesian, weightedAverage, 0.55);
+    const metrics = calculateDecisionMetrics(final, [p, e, mk]);
+    return { H: final.H, D: final.D, A: final.A, poisson: p, elo: e, market: mk, weightedAverage, bayesian, metrics };
 }
 
 function calcValue(m, c) {
@@ -989,66 +1099,128 @@ function calcValue(m, c) {
     const pd = getInputFloat(`pd_${m}`, parseFloat(stored.pd) || 0);
     const pa = getInputFloat(`pa_${m}`, parseFloat(stored.pa) || 0);
     if (!ph || !pd || !pa) return null;
-    const rH = 1/ph, rD = 1/pd, rA = 1/pa, or = rH + rD + rA;
-    const poolP = { H: rH/or, D: rD/or, A: rA/or };
-    const val = { H: (c.H/poolP.H)-1, D: (c.D/poolP.D)-1, A: (c.A/poolP.A)-1 };
-    const best = Object.keys(val).reduce((a,b) => val[a] > val[b] ? a : b);
-    return { poolP, val, best, score: val[best] };
+
+    const odds = { H: ph, D: pd, A: pa };
+    const raw = { H: 1/ph, D: 1/pd, A: 1/pa };
+    const overround = raw.H + raw.D + raw.A;
+    const poolP = { H: raw.H/overround, D: raw.D/overround, A: raw.A/overround };
+    const edge = { H: c.H/poolP.H-1, D: c.D/poolP.D-1, A: c.A/poolP.A-1 };
+    const expectedValue = {}, kelly = {};
+    ['H','D','A'].forEach(key => {
+        expectedValue[key] = c[key] * odds[key] - 1;
+        const b = odds[key] - 1, q = 1 - c[key];
+        kelly[key] = Math.max(0, b > 0 ? ((b*c[key])-q)/b : 0);
+    });
+    const best = ['H','D','A'].reduce((a,b) => expectedValue[a] > expectedValue[b] ? a : b);
+    return { odds, poolP, edge, val: edge, expectedValue, kelly, best, score: expectedValue[best], quarterKelly: kelly[best]*0.25 };
 }
 
 function runAnalysis() {
     if (matches.length === 0) { toast('Add matches first!'); return; }
+
     const resultsDiv = document.getElementById('matchesResults');
     resultsDiv.innerHTML = '';
     let totalConf = 0, minConf = 1, maxConf = 0;
-    const valueOps = [];
-    const recommendations = {};
+    let totalPredictability = 0, totalDisagreement = 0;
+    const valueOps = [], recommendations = {}, decisionMetrics = {};
+
     matches.forEach(m => {
         const stored = matchDataStore[m] || {};
         const home = getInputVal(`home_${m}`, stored.home || 'Home');
         const away = getInputVal(`away_${m}`, stored.away || 'Away');
         const c = combinedModel(m);
         const v = calcValue(m, c);
-        const best = ['H','D','A'].reduce((a,b) => c[a] > c[b] ? a : b);
+        const metrics = c.metrics;
+        const best = metrics.best;
         const conf = c[best];
-        totalConf += conf; minConf = Math.min(minConf, conf); maxConf = Math.max(maxConf, conf);
+
+        totalConf += conf;
+        minConf = Math.min(minConf, conf);
+        maxConf = Math.max(maxConf, conf);
+        totalPredictability += metrics.predictability;
+        totalDisagreement += metrics.disagreement;
         recommendations[m] = best;
-        if (v && v.score > 0.05) valueOps.push({ match: `${home} vs ${away}`, sel: v.best, score: v.score });
-        const color = conf > 0.5 ? '#2d8a4e' : conf > 0.4 ? '#f39c12' : '#e94560';
+        decisionMetrics[m] = metrics;
+
+        if (v && v.score > 0.03) {
+            valueOps.push({
+                match: `${home} vs ${away}`,
+                sel: v.best,
+                score: v.score,
+                edge: v.edge[v.best],
+                kelly: v.kelly[v.best],
+                quarterKelly: v.quarterKelly
+            });
+        }
+
+        const color = metrics.confidenceBand === 'High' ? '#2d8a4e' : metrics.confidenceBand === 'Medium' ? '#f39c12' : '#e94560';
+        const agreementText = `${Math.round(metrics.agreement.score*100)}% (${metrics.agreement.winners.join('/')})`;
+        const decisionBackground = metrics.decisionType === 'Single' ? 'rgba(45,138,78,.10)' : metrics.decisionType === 'Cover' ? 'rgba(243,156,18,.10)' : 'rgba(233,69,96,.10)';
+        const valueHtml = v ? `
+            <div style="font-size:.8em;margin-top:7px;color:${v.score>0?'#2d8a4e':'#888'};font-weight:600;">
+                💎 Best EV: ${v.best} ${v.score>=0?'+':''}${(v.score*100).toFixed(1)}%
+                · Edge ${(v.edge[v.best]*100).toFixed(1)}%
+                · ¼ Kelly ${(v.quarterKelly*100).toFixed(1)}%
+            </div>` : `
+            <div style="font-size:.78em;margin-top:7px;color:#777;">Pool odds missing — EV and Kelly unavailable.</div>`;
+
         resultsDiv.innerHTML += `
             <div class="result-card" style="border-left-color:${color};">
                 <div class="match-header">
                     <span style="font-weight:600;">${home} vs ${away}</span>
                     <span class="badge" style="background:${color};">${best} ${(conf*100).toFixed(0)}%</span>
                 </div>
-                <div style="font-size:0.75em;color:#888;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px;">
+                <div style="font-size:.75em;color:#888;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px;">
                     <div>P: H${(c.poisson.H*100).toFixed(0)}% D${(c.poisson.D*100).toFixed(0)}% A${(c.poisson.A*100).toFixed(0)}%</div>
                     <div>E: H${(c.elo.H*100).toFixed(0)}% D${(c.elo.D*100).toFixed(0)}% A${(c.elo.A*100).toFixed(0)}%</div>
                     <div>M: H${(c.market.H*100).toFixed(0)}% D${(c.market.D*100).toFixed(0)}% A${(c.market.A*100).toFixed(0)}%</div>
                 </div>
-                ${v ? `<div style="font-size:0.8em;margin-top:6px;color:${v.score>0?'#2d8a4e':'#e94560'};font-weight:600;">💎 ${v.best} ${v.score>0?'+':''}${(v.score*100).toFixed(1)}% edge</div>` : ''}
+                <div style="font-size:.76em;color:#aaa;margin-top:7px;">
+                    Bayesian: H${(c.bayesian.H*100).toFixed(0)}% D${(c.bayesian.D*100).toFixed(0)}% A${(c.bayesian.A*100).toFixed(0)}%
+                </div>
+                <div class="metric-grid">
+                    <div class="metric-box"><span class="metric-label">Confidence margin</span><span class="metric-value">${(metrics.margin*100).toFixed(1)}%</span></div>
+                    <div class="metric-box"><span class="metric-label">Model agreement</span><span class="metric-value">${agreementText}</span></div>
+                    <div class="metric-box"><span class="metric-label">Predictability</span><span class="metric-value">${(metrics.predictability*100).toFixed(0)}%</span></div>
+                    <div class="metric-box"><span class="metric-label">Draw risk</span><span class="metric-value">${(metrics.drawRisk*100).toFixed(0)}%</span></div>
+                </div>
+                <div class="decision-note" style="background:${decisionBackground};color:${color};border:1px solid ${color}55;">
+                    <strong>${metrics.confidenceBand} confidence · ${metrics.decisionType}</strong><br>
+                    Model disagreement ${(metrics.disagreement*100).toFixed(0)}%.
+                    ${metrics.decisionType === 'Single'
+                        ? 'The leading outcome has enough separation for a single selection.'
+                        : metrics.decisionType === 'Cover'
+                        ? `Consider covering ${best}/${metrics.second}.`
+                        : 'The distribution is too uncertain for a strong single-outcome call.'}
+                </div>
+                ${valueHtml}
             </div>`;
     });
+
     const avgConf = totalConf / matches.length;
-    const risk = minConf < 0.35 ? 'HIGH' : minConf < 0.45 ? 'MEDIUM' : 'LOW';
+    const avgPredictability = totalPredictability / matches.length;
+    const avgDisagreement = totalDisagreement / matches.length;
+    const risk = minConf < .37 || avgDisagreement > .50 ? 'HIGH' : minConf < .46 || avgPredictability < .20 ? 'MEDIUM' : 'LOW';
     const rc = risk === 'HIGH' ? '#e94560' : risk === 'MEDIUM' ? '#f39c12' : '#2d8a4e';
     const banner = document.getElementById('riskBanner');
     banner.style.cssText = `background:${rc}22;border:2px solid ${rc};color:${rc};`;
-    banner.innerHTML = `${risk} RISK | Avg ${(avgConf*100).toFixed(0)}% | Low ${(minConf*100).toFixed(0)}% | High ${(maxConf*100).toFixed(0)}%`;
+    banner.innerHTML = `${risk} SLATE RISK | Avg ${(avgConf*100).toFixed(0)}% | Predictability ${(avgPredictability*100).toFixed(0)}% | Disagreement ${(avgDisagreement*100).toFixed(0)}%`;
+
     const vl = document.getElementById('valueList');
     vl.innerHTML = valueOps.length ? valueOps.map(v => `
-        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(45,138,78,0.15);font-size:0.85em;">
-            <span>${v.match}</span><span style="color:#2d8a4e;font-weight:700;">${v.sel} +${(v.score*100).toFixed(1)}%</span>
-        </div>
-    `).join('') : '<div style="color:#666;font-size:0.85em;">No value opportunities found</div>';
+        <div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid rgba(45,138,78,.15);font-size:.82em;">
+            <span>${v.match}</span>
+            <span style="color:#2d8a4e;font-weight:700;text-align:right;">${v.sel} EV +${(v.score*100).toFixed(1)}%<br><small>¼ Kelly ${(v.quarterKelly*100).toFixed(1)}%</small></span>
+        </div>`).join('') : '<div style="color:#666;font-size:.85em;">No positive-EV opportunities found</div>';
+
     document.getElementById('resultsSection').classList.remove('hidden');
-    window.lastAnalysis = { recommendations, valueOps };
-    toast('✅ Analysis complete');
+    window.lastAnalysis = { recommendations, valueOps, decisionMetrics };
+    toast('✅ Decision analysis complete');
 }
 
 function generateTickets() {
     if (!window.lastAnalysis) { toast('Run analysis first!'); return; }
-    const { recommendations, valueOps } = window.lastAnalysis;
+    const { recommendations, valueOps, decisionMetrics = {} } = window.lastAnalysis;
     const list = document.getElementById('ticketsList');
     list.innerHTML = '';
     const vs = {};
@@ -1108,7 +1280,10 @@ function generateTickets() {
                 home: getInputVal('home_' + m, stored.home || ''),
                 away: getInputVal('away_' + m, stored.away || ''),
                 pick: vs[m] || recommendations[m],
-                isValue: valueOps.some(v => v.match.includes(getInputVal('home_' + m, stored.home || '')))
+                isValue: valueOps.some(v => v.match.includes(getInputVal('home_' + m, stored.home || ''))),
+                decisionType: decisionMetrics[m] ? decisionMetrics[m].decisionType : 'Single',
+                coverPick: decisionMetrics[m] ? decisionMetrics[m].second : null,
+                confidenceMargin: decisionMetrics[m] ? decisionMetrics[m].margin : null
             };
         })
     };
@@ -1141,7 +1316,10 @@ function buildTicketText(ticketData) {
         const pickLabel = m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3';
         const valueMark = m.isValue ? ' 💎' : '';
         text += 'M' + m.id.replace('m','') + ': ' + m.home + ' vs ' + m.away + '\n';
-        text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + valueMark + '\n';
+        const coverText = m.decisionType && m.decisionType !== 'Single' && m.coverPick
+            ? ' | ' + m.decisionType + ': ' + m.pick + '/' + m.coverPick
+            : '';
+        text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + valueMark + coverText + '\n';
     });
     text += '───────────────────────\n';
     text += 'Cost: R' + (poolType === 'Soccer6' ? '6' : '2') + '\n\n';
@@ -1327,7 +1505,17 @@ function parseResultsBulk() {
             const home = getInputVal('home_' + bestMatch, stored.home || '');
             const away = getInputVal('away_' + bestMatch, stored.away || '');
 
-            outcomes.push({ mid: bestMatch, res: res.result, home, away, time: new Date().toISOString() });
+            const forecastBeforeResult = combinedModel(bestMatch);
+            outcomes.push({
+                mid: bestMatch, res: res.result, home, away,
+                time: new Date().toISOString(),
+                prediction: { H: forecastBeforeResult.H, D: forecastBeforeResult.D, A: forecastBeforeResult.A },
+                modelPredictions: {
+                    poisson: forecastBeforeResult.poisson,
+                    elo: forecastBeforeResult.elo,
+                    market: forecastBeforeResult.market
+                }
+            });
 
             // Update Elo ratings
             const hR = teamRatings[home] || 1500;
@@ -1378,7 +1566,16 @@ function recordOutcome() {
 
     if (!home || !away) { toast('Match not found or missing team data'); return; }
 
-    outcomes.push({ mid, res, home, away, time: new Date().toISOString() });
+    const forecastBeforeResult = combinedModel(mid);
+    outcomes.push({
+        mid, res, home, away, time: new Date().toISOString(),
+        prediction: { H: forecastBeforeResult.H, D: forecastBeforeResult.D, A: forecastBeforeResult.A },
+        modelPredictions: {
+            poisson: forecastBeforeResult.poisson,
+            elo: forecastBeforeResult.elo,
+            market: forecastBeforeResult.market
+        }
+    });
 
     const hR = teamRatings[home] || 1500, aR = teamRatings[away] || 1500;
     const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
@@ -1395,52 +1592,80 @@ function recordOutcome() {
     toast('Outcome recorded');
 }
 
+function brierScore(probabilities, actualResult) {
+    return ['H','D','A'].reduce((sum, key) => {
+        const observed = key === actualResult ? 1 : 0;
+        return sum + Math.pow((probabilities[key] || 0) - observed, 2);
+    }, 0);
+}
+
 function selfLearn() {
     if (outcomes.length < 5) {
-        const s = document.getElementById('learningStatus');
-        s.style.display = 'block';
-        s.innerHTML = `⚠️ Need 5+ outcomes. Have: ${outcomes.length}`;
+        const status = document.getElementById('learningStatus');
+        status.style.display = 'block';
+        status.innerHTML = `⚠️ Need 5+ outcomes. Have: ${outcomes.length}`;
         return;
     }
 
-    const recent = outcomes.slice(-20);
-    let pC = 0, eC = 0, mC = 0;
+    const recent = outcomes.slice(-50);
+    const scores = { poisson: [], elo: [], market: [] };
 
-    recent.forEach(o => {
-        // Check if match data exists (in store or DOM)
-        const hasData = matchDataStore[o.mid] || document.getElementById(`home_${o.mid}`);
-        if (!hasData) return; // Skip if match data no longer available
+    recent.forEach(outcome => {
+        let predictions = outcome.modelPredictions;
+        if (!predictions) {
+            const hasData = matchDataStore[outcome.mid] || document.getElementById(`home_${outcome.mid}`);
+            if (!hasData) return;
+            predictions = {
+                poisson: poissonModel(outcome.mid),
+                elo: eloModel(outcome.mid),
+                market: marketModel(outcome.mid)
+            };
+        }
 
-        const p = poissonModel(o.mid);
-        const e = eloModel(o.mid);
-        const m = marketModel(o.mid);
-        const pB = Object.keys(p).reduce((a,b) => p[a] > p[b] ? a : b);
-        const eB = Object.keys(e).reduce((a,b) => e[a] > e[b] ? a : b);
-        const mB = Object.keys(m).reduce((a,b) => m[a] > m[b] ? a : b);
-        if (pB === o.res) pC++; if (eB === o.res) eC++; if (mB === o.res) mC++;
+        ['poisson','elo','market'].forEach(model => {
+            if (predictions[model]) scores[model].push(brierScore(predictions[model], outcome.res));
+        });
     });
 
-    const t = recent.length;
-    const pA = pC/t, eA = eC/t, mA = mC/t, tA = pA + eA + mA;
-    if (tA > 0) {
-        modelWeights.poisson = Math.max(0.1, pA/tA);
-        modelWeights.elo = Math.max(0.1, eA/tA);
-        modelWeights.market = Math.max(0.1, mA/tA);
-        const s = modelWeights.poisson + modelWeights.elo + modelWeights.market;
-        modelWeights.poisson /= s; modelWeights.elo /= s; modelWeights.market /= s;
+    const averageScore = {}, skill = {};
+    ['poisson','elo','market'].forEach(model => {
+        const arr = scores[model];
+        averageScore[model] = arr.length ? arr.reduce((s,v)=>s+v,0)/arr.length : 2/3;
+        skill[model] = 1 / Math.max(averageScore[model], 0.05);
+    });
+
+    const totalSkill = skill.poisson + skill.elo + skill.market;
+    if (totalSkill > 0) {
+        const learned = {
+            poisson: skill.poisson / totalSkill,
+            elo: skill.elo / totalSkill,
+            market: skill.market / totalSkill
+        };
+        modelWeights.poisson = .70*modelWeights.poisson + .30*learned.poisson;
+        modelWeights.elo = .70*modelWeights.elo + .30*learned.elo;
+        modelWeights.market = .70*modelWeights.market + .30*learned.market;
+        const sum = modelWeights.poisson + modelWeights.elo + modelWeights.market;
+        modelWeights.poisson /= sum;
+        modelWeights.elo /= sum;
+        modelWeights.market /= sum;
     }
-    document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson * 100);
-    document.getElementById('eloWeight').value = Math.round(modelWeights.elo * 100);
-    document.getElementById('marketWeight').value = Math.round(modelWeights.market * 100);
-    updateWeight('poisson', Math.round(modelWeights.poisson * 100));
-    updateWeight('elo', Math.round(modelWeights.elo * 100));
-    updateWeight('market', Math.round(modelWeights.market * 100));
+
+    document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson*100);
+    document.getElementById('eloWeight').value = Math.round(modelWeights.elo*100);
+    document.getElementById('marketWeight').value = Math.round(modelWeights.market*100);
+    updateWeight('poisson', Math.round(modelWeights.poisson*100));
+    updateWeight('elo', Math.round(modelWeights.elo*100));
+    updateWeight('market', Math.round(modelWeights.market*100));
     saveToStorage();
+
     const status = document.getElementById('learningStatus');
     status.style.display = 'block';
-    status.innerHTML = `🧠 Learned!<br>📊 Last ${t}: P${(pA*100).toFixed(0)}% E${(eA*100).toFixed(0)}% M${(mA*100).toFixed(0)}%<br>⚖️ New: P${(modelWeights.poisson*100).toFixed(0)}% E${(modelWeights.elo*100).toFixed(0)}% M${(modelWeights.market*100).toFixed(0)}%`;
+    status.innerHTML =
+        `🧠 Calibrated on ${recent.length} recent outcomes.<br>` +
+        `Brier — P:${averageScore.poisson.toFixed(3)} E:${averageScore.elo.toFixed(3)} M:${averageScore.market.toFixed(3)}<br>` +
+        `New weights — P:${(modelWeights.poisson*100).toFixed(0)}% E:${(modelWeights.elo*100).toFixed(0)}% M:${(modelWeights.market*100).toFixed(0)}%`;
     updateStats();
-    toast('Weights updated');
+    toast('Model weights recalibrated');
 }
 
 function updateStats() {
@@ -1452,7 +1677,7 @@ function updateStats() {
             const hasData = matchDataStore[o.mid] || document.getElementById(`home_${o.mid}`);
             if (!hasData) return;
             checked++;
-            const c = combinedModel(o.mid);
+            const c = o.prediction || combinedModel(o.mid);
             const best = ['H','D','A'].reduce((a,b) => c[a] > c[b] ? a : b);
             if (best === o.res) correct++;
         });
