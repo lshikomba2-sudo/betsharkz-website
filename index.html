@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0a0a1a">
-<title>Pool Analyzer — Decision Engine</title>
+<title>Pool Analyzer — Validated Decision Engine</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body {
@@ -185,7 +185,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
 <body>
 
 <h1>⚽ Pool Analyzer</h1>
-<p class="subtitle">Soccer 6 · 10 · 13 · Bayesian Decision Engine</p>
+<p class="subtitle">Soccer 6 · 10 · 13 · Validated Decision Engine</p>
 <div class="warning">⚠️ Educational tool. No profit guarantees.</div>
 
 <!-- SAVE / LOAD -->
@@ -934,40 +934,121 @@ function updateWeight(type, val) {
 function factorial(n) { return n <= 1 ? 1 : n * factorial(n-1); }
 function poissonP(l, k) { return Math.exp(-l) * Math.pow(l, k) / factorial(k); }
 
-function poissonModel(m) {
-    // Use stored data if DOM element missing
+function hasValidFormData(m) {
     const stored = matchDataStore[m] || {};
-    const hgs = getInputFloat(`hgs_${m}`, parseFloat(stored.hgs) || 1.5);
-    const hgc = getInputFloat(`hgc_${m}`, parseFloat(stored.hgc) || 1.2);
-    const ags = getInputFloat(`ags_${m}`, parseFloat(stored.ags) || 1.3);
-    const agc = getInputFloat(`agc_${m}`, parseFloat(stored.agc) || 1.1);
-    const lH = Math.max((hgs + agc) / 2 * 1.36, 0.5);
-    const lA = Math.max((ags + hgc) / 2, 0.3);
+    const values = [
+        getInputFloat(`hgs_${m}`, parseFloat(stored.hgs) || 0),
+        getInputFloat(`hgc_${m}`, parseFloat(stored.hgc) || 0),
+        getInputFloat(`ags_${m}`, parseFloat(stored.ags) || 0),
+        getInputFloat(`agc_${m}`, parseFloat(stored.agc) || 0)
+    ];
+
+    return values.every(value =>
+        Number.isFinite(value) &&
+        value >= 0 &&
+        value <= 8
+    ) && values.some(value => value > 0);
+}
+
+function poissonModel(m) {
+    const stored = matchDataStore[m] || {};
+
+    if (!hasValidFormData(m)) {
+        return {
+            H: 0, D: 0, A: 0,
+            available: false,
+            reason: 'Valid GS/GC form data unavailable'
+        };
+    }
+
+    const hgs = getInputFloat(`hgs_${m}`, parseFloat(stored.hgs));
+    const hgc = getInputFloat(`hgc_${m}`, parseFloat(stored.hgc));
+    const ags = getInputFloat(`ags_${m}`, parseFloat(stored.ags));
+    const agc = getInputFloat(`agc_${m}`, parseFloat(stored.agc));
+
+    const lambdaHome = Math.max((hgs + agc) / 2 * 1.18, 0.15);
+    const lambdaAway = Math.max((ags + hgc) / 2, 0.10);
+
     let pH = 0, pD = 0, pA = 0;
-    for (let hg = 0; hg < 6; hg++) {
-        for (let ag = 0; ag < 6; ag++) {
-            const p = poissonP(lH, hg) * poissonP(lA, ag);
-            if (hg > ag) pH += p; else if (hg === ag) pD += p; else pA += p;
+
+    for (let hg = 0; hg <= 8; hg++) {
+        for (let ag = 0; ag <= 8; ag++) {
+            const probability =
+                poissonP(lambdaHome, hg) *
+                poissonP(lambdaAway, ag);
+
+            if (hg > ag) pH += probability;
+            else if (hg === ag) pD += probability;
+            else pA += probability;
         }
     }
-    const t = pH + pD + pA;
-    return { H: pH/t, D: pD/t, A: pA/t };
+
+    const normalized = normalizeProbabilities({ H: pH, D: pD, A: pA });
+
+    return {
+        ...normalized,
+        available: true,
+        reason: '',
+        lambdaHome,
+        lambdaAway
+    };
+}
+
+function findStoredRating(teamName) {
+    if (!teamName) return null;
+
+    if (Object.prototype.hasOwnProperty.call(teamRatings, teamName)) {
+        return Number(teamRatings[teamName]);
+    }
+
+    const target = normalizeTeamName(teamName);
+    const key = Object.keys(teamRatings).find(
+        storedTeam => normalizeTeamName(storedTeam) === target
+    );
+
+    return key ? Number(teamRatings[key]) : null;
 }
 
 function eloModel(m) {
     const stored = matchDataStore[m] || {};
     const home = getInputVal(`home_${m}`, stored.home || '');
     const away = getInputVal(`away_${m}`, stored.away || '');
-    if (!home || !away) return { H: 0.33, D: 0.33, A: 0.33 };
-    const hR = teamRatings[home] || 1500;
-    const aR = teamRatings[away] || 1500;
-    const eH = 1 / (1 + Math.pow(10, (aR - (hR + 100)) / 400));
-    const eA = 1 / (1 + Math.pow(10, ((hR + 100) - aR) / 400));
-    const diff = Math.abs(hR + 100 - aR);
-    const df = Math.max(0.25 - (diff / 800) * 0.15, 0.10);
-    const pH = eH * (1 - df), pA = eA * (1 - df), pD = df;
-    const t = pH + pD + pA;
-    return { H: pH/t, D: pD/t, A: pA/t };
+
+    const homeRating = findStoredRating(home);
+    const awayRating = findStoredRating(away);
+
+    if (!Number.isFinite(homeRating) || !Number.isFinite(awayRating)) {
+        return {
+            H: 0, D: 0, A: 0,
+            available: false,
+            reason: 'Established Elo ratings unavailable for both teams'
+        };
+    }
+
+    const expectedHome =
+        1 / (1 + Math.pow(10, (awayRating - (homeRating + 80)) / 400));
+    const expectedAway =
+        1 / (1 + Math.pow(10, ((homeRating + 80) - awayRating) / 400));
+
+    const ratingDifference = Math.abs(homeRating + 80 - awayRating);
+    const drawProbability = Math.max(
+        0.12,
+        Math.min(0.30, 0.27 - ratingDifference / 2200)
+    );
+
+    const normalized = normalizeProbabilities({
+        H: expectedHome * (1 - drawProbability),
+        D: drawProbability,
+        A: expectedAway * (1 - drawProbability)
+    });
+
+    return {
+        ...normalized,
+        available: true,
+        reason: '',
+        homeRating,
+        awayRating
+    };
 }
 
 function marketModel(m) {
@@ -975,144 +1056,371 @@ function marketModel(m) {
     const mh = getInputFloat(`mh_${m}`, parseFloat(stored.mh) || 0);
     const md = getInputFloat(`md_${m}`, parseFloat(stored.md) || 0);
     const ma = getInputFloat(`ma_${m}`, parseFloat(stored.ma) || 0);
-    if (!mh || !md || !ma) return { H: 0.33, D: 0.33, A: 0.33 };
-    const rH = 1/mh, rD = 1/md, rA = 1/ma, or = rH + rD + rA;
-    return { H: rH/or, D: rD/or, A: rA/or };
+
+    const validOdds = [mh, md, ma].every(
+        odds => Number.isFinite(odds) && odds > 1.01 && odds < 100
+    );
+
+    if (!validOdds) {
+        return {
+            H: 0, D: 0, A: 0,
+            available: false,
+            reason: 'Complete market odds unavailable'
+        };
+    }
+
+    const raw = { H: 1 / mh, D: 1 / md, A: 1 / ma };
+    const overround = raw.H + raw.D + raw.A;
+
+    return {
+        H: raw.H / overround,
+        D: raw.D / overround,
+        A: raw.A / overround,
+        available: true,
+        reason: '',
+        odds: { H: mh, D: md, A: ma },
+        overround
+    };
 }
 
 function normalizeProbabilities(dist) {
-    const epsilon = 1e-9;
     const safe = {
-        H: Math.max(Number(dist.H) || 0, epsilon),
-        D: Math.max(Number(dist.D) || 0, epsilon),
-        A: Math.max(Number(dist.A) || 0, epsilon)
+        H: Math.max(Number(dist.H) || 0, 0),
+        D: Math.max(Number(dist.D) || 0, 0),
+        A: Math.max(Number(dist.A) || 0, 0)
     };
     const total = safe.H + safe.D + safe.A;
-    return { H: safe.H / total, D: safe.D / total, A: safe.A / total };
+
+    if (total <= 0) return { H: 1/3, D: 1/3, A: 1/3 };
+
+    return {
+        H: safe.H / total,
+        D: safe.D / total,
+        A: safe.A / total
+    };
 }
 
 function modelWinner(dist) {
-    return ['H', 'D', 'A'].reduce((best, key) => dist[key] > dist[best] ? key : best);
+    return ['H','D','A'].reduce(
+        (best, key) => dist[key] > dist[best] ? key : best
+    );
 }
 
 function probabilityEntropy(dist) {
     const p = normalizeProbabilities(dist);
-    const raw = -['H', 'D', 'A'].reduce((sum, key) => sum + p[key] * Math.log(p[key]), 0);
+    const raw = -['H','D','A'].reduce((sum, key) =>
+        p[key] > 0 ? sum + p[key] * Math.log(p[key]) : sum, 0
+    );
     return raw / Math.log(3);
 }
 
 function modelAgreement(models) {
+    if (!models.length) {
+        return { score: 0, winners: [], unanimous: false };
+    }
+
     const winners = models.map(modelWinner);
     const counts = winners.reduce((acc, winner) => {
         acc[winner] = (acc[winner] || 0) + 1;
         return acc;
     }, {});
     const maxVotes = Math.max(...Object.values(counts));
-    return { score: maxVotes / models.length, winners, unanimous: maxVotes === models.length };
+
+    return {
+        score: maxVotes / models.length,
+        winners,
+        unanimous: maxVotes === models.length
+    };
 }
 
 function modelDisagreement(models) {
+    if (models.length < 2) return 0;
+
     let varianceTotal = 0;
-    ['H', 'D', 'A'].forEach(key => {
+
+    ['H','D','A'].forEach(key => {
         const values = models.map(model => model[key]);
         const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-        varianceTotal += values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+        varianceTotal += values.reduce(
+            (sum, value) => sum + Math.pow(value - mean, 2), 0
+        ) / values.length;
     });
+
     return Math.min(1, Math.sqrt(varianceTotal / 3) * 3);
 }
 
-function bayesianFusion(poisson, elo, market, weights) {
-    const p = normalizeProbabilities(poisson);
-    const e = normalizeProbabilities(elo);
-    const mk = normalizeProbabilities(market);
-    const evidence = {};
-    ['H', 'D', 'A'].forEach(key => {
-        evidence[key] =
-            Math.pow(e[key], weights.elo) *
-            Math.pow(p[key], weights.poisson) *
-            Math.pow(mk[key], weights.market);
+function bayesianFusion(models, weights) {
+    const evidence = { H: 1, D: 1, A: 1 };
+
+    models.forEach(modelInfo => {
+        const distribution = normalizeProbabilities(modelInfo.dist);
+        const weight = weights[modelInfo.name] || 0;
+
+        ['H','D','A'].forEach(key => {
+            evidence[key] *= Math.pow(
+                Math.max(distribution[key], 1e-9),
+                weight
+            );
+        });
     });
+
     return normalizeProbabilities(evidence);
 }
 
-function blendDistributions(primary, secondary, primaryWeight = 0.55) {
-    const secondaryWeight = 1 - primaryWeight;
-    return normalizeProbabilities({
-        H: primary.H * primaryWeight + secondary.H * secondaryWeight,
-        D: primary.D * primaryWeight + secondary.D * secondaryWeight,
-        A: primary.A * primaryWeight + secondary.A * secondaryWeight
-    });
-}
-
-function calculateDecisionMetrics(finalDist, models) {
-    const ordered = ['H', 'D', 'A']
+function calculateDecisionMetrics(finalDist, activeModels, dataQuality) {
+    const ordered = ['H','D','A']
         .map(key => ({ key, value: finalDist[key] }))
         .sort((a, b) => b.value - a.value);
+
     const best = ordered[0].key;
     const second = ordered[1].key;
+    const topProbability = ordered[0].value;
     const margin = ordered[0].value - ordered[1].value;
     const entropy = probabilityEntropy(finalDist);
-    const predictability = 1 - entropy;
-    const agreement = modelAgreement(models);
-    const disagreement = modelDisagreement(models);
-    const drawProximity = Math.max(0, 1 - Math.abs(finalDist.D - Math.max(finalDist.H, finalDist.A)) / 0.25);
-    const drawRisk = Math.min(1,
-        0.40 * entropy +
-        0.25 * disagreement +
-        0.20 * (1 - agreement.score) +
-        0.15 * drawProximity
+
+    const distributions = activeModels.map(model => model.dist);
+    const agreement = modelAgreement(distributions);
+    const disagreement = modelDisagreement(distributions);
+
+    const confidenceScore = Math.max(
+        0,
+        Math.min(
+            1,
+            0.35 * topProbability +
+            0.30 * Math.min(1, margin / 0.30) +
+            0.20 * agreement.score +
+            0.15 * dataQuality -
+            0.20 * disagreement
+        )
+    );
+
+    const drawCloseness = Math.max(
+        0,
+        1 - Math.abs(
+            finalDist.D - Math.max(finalDist.H, finalDist.A)
+        ) / 0.25
+    );
+
+    const drawRisk = Math.max(
+        0,
+        Math.min(
+            1,
+            0.40 * finalDist.D +
+            0.25 * (1 - Math.min(1, margin / 0.25)) +
+            0.20 * disagreement +
+            0.15 * drawCloseness
+        )
     );
 
     let confidenceBand = 'Low';
-    if (margin >= 0.20 && predictability >= 0.35 && agreement.score >= 0.67) confidenceBand = 'High';
-    else if (margin >= 0.10 && predictability >= 0.20) confidenceBand = 'Medium';
+    if (confidenceScore >= 0.62) confidenceBand = 'High';
+    else if (confidenceScore >= 0.46) confidenceBand = 'Medium';
 
     let decisionType = 'Single';
-    if (margin < 0.06 || entropy > 0.93 || disagreement > 0.55) decisionType = 'Avoid / Cover';
-    else if (margin < 0.12 || drawRisk > 0.58 || agreement.score < 0.67) decisionType = 'Cover';
 
-    return { best, second, margin, entropy, predictability, agreement, disagreement, drawRisk, confidenceBand, decisionType };
+    if (
+        activeModels.length === 0 ||
+        confidenceScore < 0.38 ||
+        margin < 0.05
+    ) {
+        decisionType = 'Avoid / Cover';
+    } else if (
+        confidenceScore < 0.55 ||
+        margin < 0.12 ||
+        drawRisk > 0.50 ||
+        disagreement > 0.35
+    ) {
+        decisionType = 'Cover';
+    }
+
+    return {
+        best,
+        second,
+        topProbability,
+        margin,
+        entropy,
+        predictability: confidenceScore,
+        confidenceScore,
+        agreement,
+        disagreement,
+        drawRisk,
+        confidenceBand,
+        decisionType
+    };
 }
 
 function combinedModel(m) {
-    const p = poissonModel(m), e = eloModel(m), mk = marketModel(m);
-    const totalWeight = modelWeights.poisson + modelWeights.elo + modelWeights.market || 1;
-    const weights = {
-        poisson: modelWeights.poisson / totalWeight,
-        elo: modelWeights.elo / totalWeight,
-        market: modelWeights.market / totalWeight
+    const modelResults = {
+        poisson: poissonModel(m),
+        elo: eloModel(m),
+        market: marketModel(m)
     };
-    const weightedAverage = normalizeProbabilities({
-        H: weights.poisson * p.H + weights.elo * e.H + weights.market * mk.H,
-        D: weights.poisson * p.D + weights.elo * e.D + weights.market * mk.D,
-        A: weights.poisson * p.A + weights.elo * e.A + weights.market * mk.A
-    });
-    const bayesian = bayesianFusion(p, e, mk, weights);
-    const final = blendDistributions(bayesian, weightedAverage, 0.55);
-    const metrics = calculateDecisionMetrics(final, [p, e, mk]);
-    return { H: final.H, D: final.D, A: final.A, poisson: p, elo: e, market: mk, weightedAverage, bayesian, metrics };
+
+    const activeModels = Object.entries(modelResults)
+        .filter(([, result]) => result.available)
+        .map(([name, result]) => ({
+            name,
+            dist: { H: result.H, D: result.D, A: result.A }
+        }));
+
+    const unavailableModels = Object.entries(modelResults)
+        .filter(([, result]) => !result.available)
+        .map(([name, result]) => ({
+            name,
+            reason: result.reason
+        }));
+
+    const baseWeights = {
+        poisson: modelWeights.poisson,
+        elo: modelWeights.elo,
+        market: modelWeights.market
+    };
+
+    const activeWeightTotal = activeModels.reduce(
+        (sum, model) => sum + (baseWeights[model.name] || 0), 0
+    );
+
+    const weights = { poisson: 0, elo: 0, market: 0 };
+
+    if (activeWeightTotal > 0) {
+        activeModels.forEach(model => {
+            weights[model.name] =
+                baseWeights[model.name] / activeWeightTotal;
+        });
+    } else if (activeModels.length) {
+        activeModels.forEach(model => {
+            weights[model.name] = 1 / activeModels.length;
+        });
+    }
+
+    let weightedAverage = { H: 1/3, D: 1/3, A: 1/3 };
+    let bayesian = weightedAverage;
+    let final = weightedAverage;
+
+    if (activeModels.length) {
+        weightedAverage = normalizeProbabilities(
+            activeModels.reduce((acc, model) => {
+                const weight = weights[model.name];
+                acc.H += weight * model.dist.H;
+                acc.D += weight * model.dist.D;
+                acc.A += weight * model.dist.A;
+                return acc;
+            }, { H: 0, D: 0, A: 0 })
+        );
+
+        bayesian = bayesianFusion(activeModels, weights);
+
+        final = normalizeProbabilities({
+            H: 0.55 * bayesian.H + 0.45 * weightedAverage.H,
+            D: 0.55 * bayesian.D + 0.45 * weightedAverage.D,
+            A: 0.55 * bayesian.A + 0.45 * weightedAverage.A
+        });
+    }
+
+    const dataQuality = activeModels.length / 3;
+    const metrics = calculateDecisionMetrics(
+        final,
+        activeModels,
+        dataQuality
+    );
+
+    const forecastMode =
+        activeModels.length === 3 ? 'Full P/E/M forecast' :
+        activeModels.length === 2
+            ? `${activeModels.map(model => model.name.toUpperCase()).join(' + ')} forecast`
+            : activeModels.length === 1
+                ? `${activeModels[0].name.toUpperCase()}-only forecast`
+                : 'No valid forecast models';
+
+    const evTrusted =
+        activeModels.length >= 2 &&
+        activeModels.some(model => model.name !== 'market');
+
+    return {
+        H: final.H,
+        D: final.D,
+        A: final.A,
+        poisson: modelResults.poisson,
+        elo: modelResults.elo,
+        market: modelResults.market,
+        weightedAverage,
+        bayesian,
+        metrics,
+        weights,
+        activeModels: activeModels.map(model => model.name),
+        unavailableModels,
+        dataQuality,
+        forecastMode,
+        evTrusted
+    };
 }
 
 function calcValue(m, c) {
+    if (!c.evTrusted) {
+        return {
+            trusted: false,
+            reason: 'EV disabled: fewer than two independent valid models'
+        };
+    }
+
     const stored = matchDataStore[m] || {};
     const ph = getInputFloat(`ph_${m}`, parseFloat(stored.ph) || 0);
     const pd = getInputFloat(`pd_${m}`, parseFloat(stored.pd) || 0);
     const pa = getInputFloat(`pa_${m}`, parseFloat(stored.pa) || 0);
-    if (!ph || !pd || !pa) return null;
+
+    if (![ph, pd, pa].every(
+        odds => Number.isFinite(odds) && odds > 1.01
+    )) {
+        return {
+            trusted: false,
+            reason: 'EV disabled: complete pool odds unavailable'
+        };
+    }
 
     const odds = { H: ph, D: pd, A: pa };
     const raw = { H: 1/ph, D: 1/pd, A: 1/pa };
     const overround = raw.H + raw.D + raw.A;
-    const poolP = { H: raw.H/overround, D: raw.D/overround, A: raw.A/overround };
-    const edge = { H: c.H/poolP.H-1, D: c.D/poolP.D-1, A: c.A/poolP.A-1 };
-    const expectedValue = {}, kelly = {};
+    const poolP = {
+        H: raw.H/overround,
+        D: raw.D/overround,
+        A: raw.A/overround
+    };
+
+    const edge = {
+        H: c.H/poolP.H - 1,
+        D: c.D/poolP.D - 1,
+        A: c.A/poolP.A - 1
+    };
+
+    const expectedValue = {};
+    const kelly = {};
+
     ['H','D','A'].forEach(key => {
         expectedValue[key] = c[key] * odds[key] - 1;
-        const b = odds[key] - 1, q = 1 - c[key];
-        kelly[key] = Math.max(0, b > 0 ? ((b*c[key])-q)/b : 0);
+        const netOdds = odds[key] - 1;
+        const lossProbability = 1 - c[key];
+        const fullKelly = netOdds > 0
+            ? (netOdds * c[key] - lossProbability) / netOdds
+            : 0;
+        kelly[key] = Math.max(0, fullKelly);
     });
-    const best = ['H','D','A'].reduce((a,b) => expectedValue[a] > expectedValue[b] ? a : b);
-    return { odds, poolP, edge, val: edge, expectedValue, kelly, best, score: expectedValue[best], quarterKelly: kelly[best]*0.25 };
+
+    const best = ['H','D','A'].reduce(
+        (a, b) => expectedValue[a] > expectedValue[b] ? a : b
+    );
+
+    return {
+        trusted: true,
+        odds,
+        poolP,
+        edge,
+        val: edge,
+        expectedValue,
+        kelly,
+        best,
+        score: expectedValue[best],
+        quarterKelly: kelly[best] * 0.25
+    };
 }
 
 function runAnalysis() {
@@ -1142,7 +1450,7 @@ function runAnalysis() {
         recommendations[m] = best;
         decisionMetrics[m] = metrics;
 
-        if (v && v.score > 0.03) {
+        if (v && v.trusted && v.score > 0.03) {
             valueOps.push({
                 match: `${home} vs ${away}`,
                 sel: v.best,
@@ -1156,13 +1464,15 @@ function runAnalysis() {
         const color = metrics.confidenceBand === 'High' ? '#2d8a4e' : metrics.confidenceBand === 'Medium' ? '#f39c12' : '#e94560';
         const agreementText = `${Math.round(metrics.agreement.score*100)}% (${metrics.agreement.winners.join('/')})`;
         const decisionBackground = metrics.decisionType === 'Single' ? 'rgba(45,138,78,.10)' : metrics.decisionType === 'Cover' ? 'rgba(243,156,18,.10)' : 'rgba(233,69,96,.10)';
-        const valueHtml = v ? `
+        const valueHtml = v && v.trusted ? `
             <div style="font-size:.8em;margin-top:7px;color:${v.score>0?'#2d8a4e':'#888'};font-weight:600;">
                 💎 Best EV: ${v.best} ${v.score>=0?'+':''}${(v.score*100).toFixed(1)}%
                 · Edge ${(v.edge[v.best]*100).toFixed(1)}%
                 · ¼ Kelly ${(v.quarterKelly*100).toFixed(1)}%
             </div>` : `
-            <div style="font-size:.78em;margin-top:7px;color:#777;">Pool odds missing — EV and Kelly unavailable.</div>`;
+            <div style="font-size:.78em;margin-top:7px;color:#f39c12;">
+                ⚠️ ${v && v.reason ? v.reason : 'EV unavailable'}
+            </div>`;
 
         resultsDiv.innerHTML += `
             <div class="result-card" style="border-left-color:${color};">
@@ -1178,10 +1488,23 @@ function runAnalysis() {
                 <div style="font-size:.76em;color:#aaa;margin-top:7px;">
                     Bayesian: H${(c.bayesian.H*100).toFixed(0)}% D${(c.bayesian.D*100).toFixed(0)}% A${(c.bayesian.A*100).toFixed(0)}%
                 </div>
+                <div style="font-size:.75em;color:#4a90d9;margin-top:6px;">
+                    ${c.forecastMode} · Active weights:
+                    P${Math.round(c.weights.poisson*100)}%
+                    E${Math.round(c.weights.elo*100)}%
+                    M${Math.round(c.weights.market*100)}%
+                </div>
+                ${c.unavailableModels.length ? `
+                    <div style="font-size:.72em;color:#f39c12;margin-top:5px;">
+                        Excluded: ${c.unavailableModels.map(item =>
+                            item.name.toUpperCase() + ' — ' + item.reason
+                        ).join(' | ')}
+                    </div>
+                ` : ''}
                 <div class="metric-grid">
                     <div class="metric-box"><span class="metric-label">Confidence margin</span><span class="metric-value">${(metrics.margin*100).toFixed(1)}%</span></div>
                     <div class="metric-box"><span class="metric-label">Model agreement</span><span class="metric-value">${agreementText}</span></div>
-                    <div class="metric-box"><span class="metric-label">Predictability</span><span class="metric-value">${(metrics.predictability*100).toFixed(0)}%</span></div>
+                    <div class="metric-box"><span class="metric-label">Decision confidence</span><span class="metric-value">${(metrics.predictability*100).toFixed(0)}%</span></div>
                     <div class="metric-box"><span class="metric-label">Draw risk</span><span class="metric-value">${(metrics.drawRisk*100).toFixed(0)}%</span></div>
                 </div>
                 <div class="decision-note" style="background:${decisionBackground};color:${color};border:1px solid ${color}55;">
@@ -1204,7 +1527,7 @@ function runAnalysis() {
     const rc = risk === 'HIGH' ? '#e94560' : risk === 'MEDIUM' ? '#f39c12' : '#2d8a4e';
     const banner = document.getElementById('riskBanner');
     banner.style.cssText = `background:${rc}22;border:2px solid ${rc};color:${rc};`;
-    banner.innerHTML = `${risk} SLATE RISK | Avg ${(avgConf*100).toFixed(0)}% | Predictability ${(avgPredictability*100).toFixed(0)}% | Disagreement ${(avgDisagreement*100).toFixed(0)}%`;
+    banner.innerHTML = `${risk} SLATE RISK | Avg ${(avgConf*100).toFixed(0)}% | Decision confidence ${(avgPredictability*100).toFixed(0)}% | Disagreement ${(avgDisagreement*100).toFixed(0)}%`;
 
     const vl = document.getElementById('valueList');
     vl.innerHTML = valueOps.length ? valueOps.map(v => `
@@ -1774,280 +2097,180 @@ init();
 // ============================================================
 
 
-function previewFormData() {
-    let text = document.getElementById('formDataInput').value.trim();
-    if (!text) { toast('Paste something first!'); return; }
+function isGenericTeamFragment(name) {
+    const normalized = String(name || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9 ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-    // Same cleanup as parseFormData
-    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
-    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
-    text = text.replace(/\s*\[\d+\]\s*/g, ' ');
-    text = text.replace(/\s+/g, ' ').trim();
+    const blocked = new Set([
+        'FC','FK','CF','SC','AC','AS','NK','NS','SK',
+        'PFC','HNK','CITY','UNITED','CLUB','TEAM'
+    ]);
 
-    const teamData = {};
-    const patternA = /([A-Z][A-Z\s'\-]+?):\s*GS=([\d.]+)\s*,?\s*GC=([\d.]+)/g;
+    if (!normalized || blocked.has(normalized)) return true;
+
+    const meaningful = normalized
+        .split(' ')
+        .filter(token => token.length >= 3 && !blocked.has(token));
+
+    return meaningful.length === 0;
+}
+
+function extractFormTeamData(rawText) {
+    let text = String(rawText || '')
+        .replace(/\r\n?/g, '\n')
+        .replace(/%[0-9A-Fa-f]{2}/g, ' ')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/https?:\/\/[^\s]+/g, ' ')
+        .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+        .replace(/\u00A0/g, ' ');
+
+    text = text.replace(
+        /([0-9.]+)\s+(?=[A-Za-z][A-Za-z0-9 .'\-&/]{2,80}:\s*GS\s*=)/g,
+        '$1\n'
+    );
+
+    const records = [];
+    const pattern =
+        /(?:^|\n)\s*(?:[-*]\s*)?([A-Za-z0-9][A-Za-z0-9 .'\-&/]{1,80}?)\s*:\s*GS\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*,?\s*GC\s*=\s*([0-9]+(?:\.[0-9]+)?)/gim;
+
     let match;
-    while ((match = patternA.exec(text)) !== null) {
-        const teamName = match[1].trim();
-        const gs = parseFloat(match[2]);
-        const gc = parseFloat(match[3]);
-        if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
-            teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
-        }
+    while ((match = pattern.exec(text)) !== null) {
+        const teamName = match[1]
+            .replace(/^(?:TEAM|MATCH)\s*[:-]\s*/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const gs = Number(match[2]);
+        const gc = Number(match[3]);
+
+        if (
+            isGenericTeamFragment(teamName) ||
+            !Number.isFinite(gs) ||
+            !Number.isFinite(gc) ||
+            gs < 0 || gc < 0 || gs > 8 || gc > 8
+        ) continue;
+
+        records.push({
+            key: normalizeTeamName(teamName),
+            rawName: teamName,
+            gs,
+            gc
+        });
     }
 
+    const unique = new Map();
+    records.forEach(record => {
+        if (record.key && !unique.has(record.key)) {
+            unique.set(record.key, record);
+        }
+    });
+
+    return [...unique.values()];
+}
+
+function strictTeamSimilarity(a, b) {
+    const normA = normalizeTeamName(a);
+    const normB = normalizeTeamName(b);
+
+    if (!normA || !normB) return 0;
+    if (normA === normB) return 1;
+
+    const stopWords = new Set([
+        'fc','fk','cf','sc','ac','as','nk','ns','sk',
+        'pfc','hnk','club'
+    ]);
+
+    const tokensA = normA.split(' ')
+        .filter(token => token.length >= 3 && !stopWords.has(token));
+    const tokensB = normB.split(' ')
+        .filter(token => token.length >= 3 && !stopWords.has(token));
+
+    if (!tokensA.length || !tokensB.length) return 0;
+
+    const intersection = tokensA.filter(token =>
+        tokensB.includes(token)
+    ).length;
+
+    const union = new Set([...tokensA, ...tokensB]).size;
+    const jaccard = union ? intersection / union : 0;
+
+    const containment =
+        normA.includes(normB) || normB.includes(normA)
+            ? Math.min(normA.length, normB.length) /
+              Math.max(normA.length, normB.length)
+            : 0;
+
+    return Math.max(jaccard, containment);
+}
+
+function findBestFormRecord(teamName, records) {
+    let best = null;
+    let bestScore = 0;
+
+    records.forEach(record => {
+        const score = strictTeamSimilarity(teamName, record.rawName);
+        if (score > bestScore) {
+            best = record;
+            bestScore = score;
+        }
+    });
+
+    const exact = best &&
+        normalizeTeamName(teamName) === best.key;
+
+    if (exact || bestScore >= 0.72) {
+        return { record: best, score: exact ? 1 : bestScore };
+    }
+
+    return null;
+}
+
+function previewFormData() {
+    const text = document.getElementById('formDataInput').value;
+
+    if (!text.trim()) {
+        toast('Paste something first!');
+        return;
+    }
+
+    const records = extractFormTeamData(text);
     const previewDiv = document.getElementById('formPreview');
-    if (Object.keys(teamData).length === 0) {
-        previewDiv.innerHTML = '<strong style="color:#e94560;">❌ No teams parsed.</strong><br>Cleaned text:<br><code style="word-break:break-all;">' + text.substring(0, 200) + (text.length > 200 ? '...' : '') + '</code>';
+
+    if (!records.length) {
+        previewDiv.innerHTML =
+            '<strong style="color:#e94560;">❌ No valid team records parsed.</strong><br>' +
+            'Use: Team Name: GS=1.5, GC=1.2';
         previewDiv.style.display = 'block';
         return;
     }
 
-    let html = '<strong>👁️ Preview (' + Object.keys(teamData).length + ' teams found):</strong><br>';
-    for (const [key, data] of Object.entries(teamData)) {
-        html += data.rawName + ': GS=' + data.gs + ', GC=' + data.gc + '<br>';
-    }
-    previewDiv.innerHTML = html;
+    previewDiv.innerHTML =
+        '<strong>👁️ Preview (' + records.length + ' valid teams):</strong><br>' +
+        records.map(record =>
+            record.rawName + ': GS=' + record.gs + ', GC=' + record.gc
+        ).join('<br>');
+
     previewDiv.style.display = 'block';
-    toast('👁️ Preview ready - check below');
-}
-
-
-// ============================================================
-// MARKET ODDS PARSER
-// ============================================================
-
-function parseMarketOdds() {
-    let text = document.getElementById('marketOddsInput').value.trim();
-    if (!text) { toast('Paste odds first!'); return; }
-
-    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
-    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
-    text = text.replace(/\s+/g, ' ').trim();
-
-    const oddsList = [];
-
-    // Strategy 1: Match lines with team names and odds
-    // "Athlone Town 2.35 3.50 2.55 Cobh Ramblers"
-    const matchPattern = /([A-Z][A-Z\s'\-]+?)\s+(?:vs\s+)?([A-Z][A-Z\s'\-]+?)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/gi;
-    let m;
-    while ((m = matchPattern.exec(text)) !== null) {
-        oddsList.push({
-            home: m[1].trim(), away: m[2].trim(),
-            h: m[3], d: m[4], a: m[5]
-        });
-    }
-
-    // Strategy 2: Just numbers in order (assumes same order as matches)
-    if (oddsList.length === 0) {
-        const numbers = text.match(/[\d.]+/g);
-        if (numbers && numbers.length >= 3) {
-            for (let i = 0; i < matches.length && i * 3 < numbers.length; i++) {
-                const stored = matchDataStore[matches[i]] || {};
-                const home = getInputVal('home_' + matches[i], stored.home || '');
-                const away = getInputVal('away_' + matches[i], stored.away || '');
-                if (home && away) {
-                    oddsList.push({
-                        home, away,
-                        h: numbers[i*3], d: numbers[i*3+1], a: numbers[i*3+2]
-                    });
-                }
-            }
-        }
-    }
-
-    // Strategy 3: Tab-separated or pipe-separated
-    if (oddsList.length === 0) {
-        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        for (const line of lines) {
-            // "Athlone Town | 2.35 | 3.50 | 2.55 | Cobh Ramblers"
-            const parts = line.split(/[\|\t]/).map(p => p.trim()).filter(p => p.length > 0);
-            if (parts.length >= 5) {
-                const nums = parts.filter(p => p.match(/^[\d.]+$/));
-                if (nums.length >= 3) {
-                    oddsList.push({
-                        home: parts[0], away: parts[parts.length-1],
-                        h: nums[0], d: nums[1], a: nums[2]
-                    });
-                }
-            }
-        }
-    }
-
-    if (oddsList.length === 0) {
-        toast('❌ Could not parse odds. Try: TeamA 2.35 3.50 2.55 TeamB');
-        return;
-    }
-
-    let filled = 0;
-    let statusHtml = '<strong>✅ Filled ' + oddsList.length + ' matches:</strong><br>';
-
-    oddsList.forEach(o => {
-        // Find matching match
-        let bestMatch = null;
-        let bestScore = 0;
-
-        for (const m of matches) {
-            const stored = matchDataStore[m] || {};
-            const home = getInputVal('home_' + m, stored.home || '');
-            const away = getInputVal('away_' + m, stored.away || '');
-            if (!home || !away) continue;
-
-            const homeNorm = normalizeTeamName(home);
-            const awayNorm = normalizeTeamName(away);
-            const oHomeNorm = normalizeTeamName(o.home);
-            const oAwayNorm = normalizeTeamName(o.away);
-
-            let score = 0;
-            if (homeNorm === oHomeNorm || homeNorm.includes(oHomeNorm) || oHomeNorm.includes(homeNorm)) score += 2;
-            if (awayNorm === oAwayNorm || awayNorm.includes(oAwayNorm) || oAwayNorm.includes(awayNorm)) score += 2;
-            if (fuzzyMatch(homeNorm, oHomeNorm)) score += 1;
-            if (fuzzyMatch(awayNorm, oAwayNorm)) score += 1;
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = m;
-            }
-        }
-
-        if (bestMatch && bestScore >= 2) {
-            const mhEl = document.getElementById('mh_' + bestMatch);
-            const mdEl = document.getElementById('md_' + bestMatch);
-            const maEl = document.getElementById('ma_' + bestMatch);
-            if (mhEl) mhEl.value = o.h;
-            if (mdEl) mdEl.value = o.d;
-            if (maEl) maEl.value = o.a;
-
-            const stored = matchDataStore[bestMatch] || {};
-            stored.mh = o.h; stored.md = o.d; stored.ma = o.a;
-            matchDataStore[bestMatch] = stored;
-
-            filled++;
-            statusHtml += o.home + ' vs ' + o.away + ': ' + o.h + ' / ' + o.d + ' / ' + o.a + '<br>';
-        } else {
-            statusHtml += '<span style="color:#e94560;">' + o.home + ' vs ' + o.away + ' (no match)</span><br>';
-        }
-    });
-
-    saveToStorage();
-
-    const statusDiv = document.getElementById('marketOddsStatus');
-    statusDiv.innerHTML = statusHtml;
-    statusDiv.style.display = 'block';
-
-    toast('✅ Filled ' + filled + ' market odds!');
-    document.getElementById('marketOddsInput').value = '';
-}
-
-function generateMarketOddsPrompt() {
-    if (matches.length === 0) { toast('Add matches first!'); return; }
-
-    let prompt = `I need CURRENT market odds (1X2) for these soccer matches. Get the latest odds from Bet365, Pinnacle, or any major bookmaker.\n\nFormat EXACTLY like this for each match:\nMatch: Team A vs Team B | H=X.XX, D=X.XX, A=X.XX\n\nMatches:\n`;
-
-    matches.forEach(m => {
-        const stored = matchDataStore[m] || {};
-        const home = getInputVal('home_' + m, stored.home || '');
-        const away = getInputVal('away_' + m, stored.away || '');
-        if (home && away) {
-            prompt += `- ${home} vs ${away}\n`;
-        }
-    });
-
-    prompt += `\nReturn ONLY the formatted match lines. No extra text.`;
-
-    currentPrompt = prompt;
-
-    const out = document.getElementById('promptOutput');
-    out.textContent = prompt;
-    out.classList.remove('hidden');
-    document.getElementById('copyPromptBtn').style.display = 'block';
-    toast('✨ Market odds prompt generated!');
+    toast('👁️ Strict preview ready');
 }
 
 function parseFormData() {
-    let text = document.getElementById('formDataInput').value.trim();
-    if (!text) { toast('Paste form data first!'); return; }
+    const input = document.getElementById('formDataInput');
+    const records = extractFormTeamData(input.value);
 
-    // STEP 1: Aggressive cleanup of copy-paste garbage
-    // Remove URL-encoded chars (%20, %3D, etc.)
-    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
-    // Remove markdown links [text](url)
-    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-    // Remove raw URLs
-    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
-    // Normalize all whitespace to single spaces
-    text = text.replace(/\s+/g, ' ').trim();
-
-    const teamData = {};
-
-    // STEP 2: The AI output when squished looks like:
-    // FRANCE: GS=2.4, GC=0.4 MOROCCO: GS=2.2, GC=0.6 VOJVODINA NS: GS=2.4, GC=0.8...
-    // Pattern: TEAM_NAME: GS=NUM, GC=NUM (team name is uppercase words before colon)
-
-    // Strategy A: Find all "TEAM: GS=X.X, GC=X.X" patterns in the single string
-    // Team name = one or more uppercase words (with spaces, apostrophes, hyphens)
-    const patternA = /([A-Z][A-Z\s'\-]+?):\s*GS=([\d.]+)\s*,?\s*GC=([\d.]+)/g;
-    let match;
-    while ((match = patternA.exec(text)) !== null) {
-        const teamName = match[1].trim();
-        const gs = parseFloat(match[2]);
-        const gc = parseFloat(match[3]);
-        if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
-            teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
-        }
+    if (!records.length) {
+        toast('❌ No valid team form records found.');
+        return;
     }
 
-    // Strategy B: If still no matches, try splitting on "GS=" as delimiter
-    if (Object.keys(teamData).length === 0) {
-        const parts = text.split('GS=');
-        for (let i = 1; i < parts.length; i++) {
-            const part = parts[i];
-            // Before this GS= is the team name
-            const prevText = parts[i-1];
-            const teamMatch = prevText.match(/([A-Z][A-Z\s'\-]+?)$/);
-            if (teamMatch) {
-                const teamName = teamMatch[1].trim();
-                const numMatch = part.match(/^([\d.]+)\s*,?\s*GC=([\d.]+)/);
-                if (numMatch) {
-                    const gs = parseFloat(numMatch[1]);
-                    const gc = parseFloat(numMatch[2]);
-                    if (!isNaN(gs) && !isNaN(gc) && teamName.length > 1) {
-                        teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
-                    }
-                }
-            }
-        }
-    }
-
-    // Strategy C: Line-by-line fallback (for properly formatted input)
-    if (Object.keys(teamData).length === 0) {
-        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        for (const line of lines) {
-            let m = line.match(/^(.+?):\s*GS=([\d.]+),?\s*GC=([\d.]+)/i);
-            if (!m) {
-                m = line.match(/^(.+?)\s+GS=([\d.]+)\s+GC=([\d.]+)/i);
-            }
-            if (m) {
-                const teamName = m[1].trim();
-                const gs = parseFloat(m[2]);
-                const gc = parseFloat(m[3]);
-                if (!isNaN(gs) && !isNaN(gc) && teamName.length > 2) {
-                    teamData[normalizeTeamName(teamName)] = { gs, gc, rawName: teamName };
-                }
-            }
-        }
-    }
-
-    if (Object.keys(teamData).length === 0) { 
-        toast('❌ Could not parse. Try pasting as plain text first.'); 
-        return; 
-    }
-
-    let filled = 0;
-    let statusHtml = '<strong>✅ Parsed ' + Object.keys(teamData).length + ' teams:</strong><br>';
-    let unmatched = [];
+    let filledTeams = 0;
+    let completedMatches = 0;
+    const unmatched = [];
+    let statusHtml =
+        '<strong>✅ Parsed ' + records.length + ' valid teams:</strong><br>';
 
     matches.forEach(m => {
         const homeEl = document.getElementById('home_' + m);
@@ -2057,84 +2280,86 @@ function parseFormData() {
         const agsEl = document.getElementById('ags_' + m);
         const agcEl = document.getElementById('agc_' + m);
 
-        if (!homeEl || !awayEl || !homeEl.value || !awayEl.value) return;
+        if (!homeEl || !awayEl) return;
 
-        const homeNorm = normalizeTeamName(homeEl.value);
-        const awayNorm = normalizeTeamName(awayEl.value);
+        const homeMatch = findBestFormRecord(homeEl.value, records);
+        const awayMatch = findBestFormRecord(awayEl.value, records);
 
-        let matchFilled = false;
-        let homeMatched = false;
-        let awayMatched = false;
-
-        // Try exact match first, then fuzzy
-        for (const [key, data] of Object.entries(teamData)) {
-            if (homeNorm === key || homeNorm.includes(key) || key.includes(homeNorm) || 
-                fuzzyMatch(homeNorm, key)) {
-                if (hgsEl) { hgsEl.value = data.gs; matchFilled = true; homeMatched = true; }
-                if (hgcEl) { hgcEl.value = data.gc; matchFilled = true; homeMatched = true; }
-                statusHtml += homeEl.value + ' (H): GS=' + data.gs + ', GC=' + data.gc + '<br>';
-                break;
-            }
+        if (homeMatch) {
+            hgsEl.value = homeMatch.record.gs;
+            hgcEl.value = homeMatch.record.gc;
+            filledTeams++;
+            statusHtml +=
+                homeEl.value + ' (H) ← ' +
+                homeMatch.record.rawName +
+                ': GS=' + homeMatch.record.gs +
+                ', GC=' + homeMatch.record.gc + '<br>';
+        } else {
+            hgsEl.value = '';
+            hgcEl.value = '';
+            unmatched.push(homeEl.value);
         }
 
-        for (const [key, data] of Object.entries(teamData)) {
-            if (awayNorm === key || awayNorm.includes(key) || key.includes(awayNorm) || 
-                fuzzyMatch(awayNorm, key)) {
-                if (agsEl) { agsEl.value = data.gs; matchFilled = true; awayMatched = true; }
-                if (agcEl) { agcEl.value = data.gc; matchFilled = true; awayMatched = true; }
-                statusHtml += awayEl.value + ' (A): GS=' + data.gs + ', GC=' + data.gc + '<br>';
-                break;
-            }
+        if (awayMatch) {
+            agsEl.value = awayMatch.record.gs;
+            agcEl.value = awayMatch.record.gc;
+            filledTeams++;
+            statusHtml +=
+                awayEl.value + ' (A) ← ' +
+                awayMatch.record.rawName +
+                ': GS=' + awayMatch.record.gs +
+                ', GC=' + awayMatch.record.gc + '<br>';
+        } else {
+            agsEl.value = '';
+            agcEl.value = '';
+            unmatched.push(awayEl.value);
         }
 
-        if (matchFilled) filled++;
-        if (!homeMatched) unmatched.push(homeEl.value);
-        if (!awayMatched) unmatched.push(awayEl.value);
-    });
-
-    // Update stored data
-    matches.forEach(m => {
         const stored = matchDataStore[m] || {};
-        const hgsEl = document.getElementById('hgs_' + m);
-        const hgcEl = document.getElementById('hgc_' + m);
-        const agsEl = document.getElementById('ags_' + m);
-        const agcEl = document.getElementById('agc_' + m);
-        if (hgsEl) stored.hgs = hgsEl.value;
-        if (hgcEl) stored.hgc = hgcEl.value;
-        if (agsEl) stored.ags = agsEl.value;
-        if (agcEl) stored.agc = agcEl.value;
+        stored.hgs = hgsEl.value;
+        stored.hgc = hgcEl.value;
+        stored.ags = agsEl.value;
+        stored.agc = agcEl.value;
+        stored.formValidated = Boolean(homeMatch && awayMatch);
         matchDataStore[m] = stored;
-    });
-    saveToStorage();
 
-    // Show unmatched teams
-    const uniqueUnmatched = [...new Set(unmatched)].filter(u => u && u.trim());
-    if (uniqueUnmatched.length > 0) {
-        statusHtml += '<br><strong style="color:#e94560;">⚠️ Unmatched:</strong><br>';
-        uniqueUnmatched.forEach(u => { statusHtml += u + '<br>'; });
+        if (homeMatch && awayMatch) completedMatches++;
+    });
+
+    const uniqueUnmatched = [...new Set(unmatched)].filter(Boolean);
+
+    if (uniqueUnmatched.length) {
+        statusHtml +=
+            '<br><strong style="color:#e94560;">⚠️ Not matched — Poisson disabled for affected matches:</strong><br>' +
+            uniqueUnmatched.join('<br>');
     }
+
+    statusHtml +=
+        '<br><strong>' + completedMatches +
+        ' complete matches; ' + filledTeams +
+        ' team records filled.</strong>';
+
+    saveToStorage();
 
     const statusDiv = document.getElementById('formFillStatus');
     statusDiv.innerHTML = statusHtml;
     statusDiv.style.display = 'block';
 
-    toast('✅ Auto-filled ' + filled + ' matches!');
-    document.getElementById('formDataInput').value = '';
+    toast('✅ Valid form loaded for ' + completedMatches + ' matches');
+    input.value = '';
 }
 
 function normalizeTeamName(name) {
-    return name.toLowerCase()
-        .replace(/fc|fk|nk|hnk|pfc/g, '')
-        .replace(/[^a-z0-9\s]/g, '')
+    return String(name || '')
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^a-z0-9\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
 
 function fuzzyMatch(a, b) {
-    // Simple fuzzy: check if significant words overlap
-    const wordsA = a.split(' ').filter(w => w.length > 2);
-    const wordsB = b.split(' ').filter(w => w.length > 2);
-    return wordsA.some(wa => wordsB.some(wb => wa === wb || wa.includes(wb) || wb.includes(wa)));
+    return strictTeamSimilarity(a, b) >= 0.72;
 }
 
 </script>
