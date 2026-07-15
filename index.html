@@ -185,7 +185,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #e94560
 <body>
 
 <h1>⚽ Pool Analyzer</h1>
-<p class="subtitle">Soccer 6 · 10 · 13 · Validated Decision Engine</p>
+<p class="subtitle">Soccer 6 · 10 · 13 · Validated Decision Engine v2</p>
 <div class="warning">⚠️ Educational tool. No profit guarantees.</div>
 
 <!-- SAVE / LOAD -->
@@ -278,7 +278,7 @@ Formats that work:
 3. Just the numbers: 2.35 3.50 2.55 (in match order)"></textarea>
     </div>
     <div class="grid-2">
-        <button class="btn btn-blue" onclick="parseMarketOdds()">🧠 Parse & Fill Odds</button>
+        <button type="button" id="parseMarketOddsBtn" class="btn btn-blue" onclick="parseMarketOdds()">🧠 Parse & Fill Odds</button>
         <button class="btn btn-purple" onclick="generateMarketOddsPrompt()">✨ AI Prompt for Odds</button>
     </div>
     <button class="btn btn-gray" onclick="document.getElementById('marketOddsInput').value=''" style="margin-top:6px;">Clear</button>
@@ -455,45 +455,14 @@ Or just paste the full Interbet results page"></textarea>
 </div>
 
 <script>
-// Robust click handling for embedded webviews (Kimi, etc.)
-function bindButtonClicks() {
-    document.querySelectorAll('.btn, button').forEach(btn => {
-        // Remove any existing handlers to prevent double-firing
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode.replaceChild(newBtn, btn);
-
-        // Add both click and touch handlers
-        newBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const onclick = this.getAttribute('onclick');
-            if (onclick) {
-                eval(onclick);
-            }
-        });
-
-        newBtn.addEventListener('touchend', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const onclick = this.getAttribute('onclick');
-            if (onclick) {
-                eval(onclick);
-            }
-        });
+// Use native browser click handling for better mobile compatibility.
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('button').forEach(button => {
+        if (!button.hasAttribute('type')) {
+            button.setAttribute('type', 'button');
+        }
     });
-}
-
-// Re-bind after any DOM changes
-const origAddMatch = addMatch;
-addMatch = function(...args) {
-    origAddMatch.apply(this, args);
-    setTimeout(bindButtonClicks, 100);
-};
-
-// Initial bind
-document.addEventListener('DOMContentLoaded', bindButtonClicks);
-setTimeout(bindButtonClicks, 500);
-
+});
 
 let matches = [], matchCounter = 0;
 let modelWeights = { poisson: 0.35, elo: 0.35, market: 0.30 };
@@ -2255,6 +2224,154 @@ function previewFormData() {
 
     previewDiv.style.display = 'block';
     toast('👁️ Strict preview ready');
+}
+
+function parseMarketOdds() {
+    let text = document.getElementById('marketOddsInput').value.trim();
+    if (!text) { toast('Paste odds first!'); return; }
+
+    text = text.replace(/%[0-9A-Fa-f]{2}/g, ' ');
+    text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+    text = text.replace(/https?:\/\/[^\s]+/g, ' ');
+    text = text.replace(/\s+/g, ' ').trim();
+
+    const oddsList = [];
+
+    // Strategy 1: Match lines with team names and odds
+    // "Athlone Town 2.35 3.50 2.55 Cobh Ramblers"
+    const matchPattern = /([A-Z][A-Z\s'\-]+?)\s+(?:vs\s+)?([A-Z][A-Z\s'\-]+?)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/gi;
+    let m;
+    while ((m = matchPattern.exec(text)) !== null) {
+        oddsList.push({
+            home: m[1].trim(), away: m[2].trim(),
+            h: m[3], d: m[4], a: m[5]
+        });
+    }
+
+    // Strategy 2: Just numbers in order (assumes same order as matches)
+    if (oddsList.length === 0) {
+        const numbers = text.match(/[\d.]+/g);
+        if (numbers && numbers.length >= 3) {
+            for (let i = 0; i < matches.length && i * 3 < numbers.length; i++) {
+                const stored = matchDataStore[matches[i]] || {};
+                const home = getInputVal('home_' + matches[i], stored.home || '');
+                const away = getInputVal('away_' + matches[i], stored.away || '');
+                if (home && away) {
+                    oddsList.push({
+                        home, away,
+                        h: numbers[i*3], d: numbers[i*3+1], a: numbers[i*3+2]
+                    });
+                }
+            }
+        }
+    }
+
+    // Strategy 3: Tab-separated or pipe-separated
+    if (oddsList.length === 0) {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        for (const line of lines) {
+            // "Athlone Town | 2.35 | 3.50 | 2.55 | Cobh Ramblers"
+            const parts = line.split(/[\|\t]/).map(p => p.trim()).filter(p => p.length > 0);
+            if (parts.length >= 5) {
+                const nums = parts.filter(p => p.match(/^[\d.]+$/));
+                if (nums.length >= 3) {
+                    oddsList.push({
+                        home: parts[0], away: parts[parts.length-1],
+                        h: nums[0], d: nums[1], a: nums[2]
+                    });
+                }
+            }
+        }
+    }
+
+    if (oddsList.length === 0) {
+        toast('❌ Could not parse odds. Try: TeamA 2.35 3.50 2.55 TeamB');
+        return;
+    }
+
+    let filled = 0;
+    let statusHtml = '<strong>✅ Filled ' + oddsList.length + ' matches:</strong><br>';
+
+    oddsList.forEach(o => {
+        // Find matching match
+        let bestMatch = null;
+        let bestScore = 0;
+
+        for (const m of matches) {
+            const stored = matchDataStore[m] || {};
+            const home = getInputVal('home_' + m, stored.home || '');
+            const away = getInputVal('away_' + m, stored.away || '');
+            if (!home || !away) continue;
+
+            const homeNorm = normalizeTeamName(home);
+            const awayNorm = normalizeTeamName(away);
+            const oHomeNorm = normalizeTeamName(o.home);
+            const oAwayNorm = normalizeTeamName(o.away);
+
+            let score = 0;
+            if (homeNorm === oHomeNorm || homeNorm.includes(oHomeNorm) || oHomeNorm.includes(homeNorm)) score += 2;
+            if (awayNorm === oAwayNorm || awayNorm.includes(oAwayNorm) || oAwayNorm.includes(awayNorm)) score += 2;
+            if (fuzzyMatch(homeNorm, oHomeNorm)) score += 1;
+            if (fuzzyMatch(awayNorm, oAwayNorm)) score += 1;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = m;
+            }
+        }
+
+        if (bestMatch && bestScore >= 2) {
+            const mhEl = document.getElementById('mh_' + bestMatch);
+            const mdEl = document.getElementById('md_' + bestMatch);
+            const maEl = document.getElementById('ma_' + bestMatch);
+            if (mhEl) mhEl.value = o.h;
+            if (mdEl) mdEl.value = o.d;
+            if (maEl) maEl.value = o.a;
+
+            const stored = matchDataStore[bestMatch] || {};
+            stored.mh = o.h; stored.md = o.d; stored.ma = o.a;
+            matchDataStore[bestMatch] = stored;
+
+            filled++;
+            statusHtml += o.home + ' vs ' + o.away + ': ' + o.h + ' / ' + o.d + ' / ' + o.a + '<br>';
+        } else {
+            statusHtml += '<span style="color:#e94560;">' + o.home + ' vs ' + o.away + ' (no match)</span><br>';
+        }
+    });
+
+    saveToStorage();
+
+    const statusDiv = document.getElementById('marketOddsStatus');
+    statusDiv.innerHTML = statusHtml;
+    statusDiv.style.display = 'block';
+
+    toast('✅ Filled ' + filled + ' market odds!');
+    document.getElementById('marketOddsInput').value = '';
+}
+
+function generateMarketOddsPrompt() {
+    if (matches.length === 0) { toast('Add matches first!'); return; }
+
+    let prompt = `I need CURRENT market odds (1X2) for these soccer matches. Get the latest odds from Bet365, Pinnacle, or any major bookmaker.\n\nFormat EXACTLY like this for each match:\nMatch: Team A vs Team B | H=X.XX, D=X.XX, A=X.XX\n\nMatches:\n`;
+
+    matches.forEach(m => {
+        const stored = matchDataStore[m] || {};
+        const home = getInputVal('home_' + m, stored.home || '');
+        const away = getInputVal('away_' + m, stored.away || '');
+        if (home && away) {
+            prompt += `- ${home} vs ${away}\n`;
+        }
+    });
+
+    prompt += `\nReturn ONLY the formatted match lines. No extra text.`;
+
+    currentPrompt = prompt;
+
+    const out = document.getElementById('promptOutput');
+    out.textContent = prompt;
+    out.classList.remove('hidden');
+    document.getElementById('copyPromptBtn').style.display = 'block';
+    toast('✨ Market odds prompt generated!');
 }
 
 function parseFormData() {
