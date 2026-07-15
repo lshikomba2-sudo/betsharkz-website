@@ -302,6 +302,17 @@ Formats that work:
             <input type="text" id="roundName" value="Week 32">
         </div>
     </div>
+    <div class="grid-2" style="margin-top:8px;">
+        <div>
+            <label>Bankroll (R)</label>
+            <input type="number" id="bankrollInput" min="1" step="1" value="100" onchange="saveTicketSettings()">
+        </div>
+        <div>
+            <label>Maximum Spend (R, optional)</label>
+            <input type="number" id="maxSpendInput" min="0" step="1" placeholder="Kelly budget" onchange="saveTicketSettings()">
+        </div>
+    </div>
+    <div class="hint">Ticket exposure is capped at 10% of bankroll. Kelly values support individual selections, not an exact combined pool stake.</div>
 </div>
 
 <!-- MATCHES -->
@@ -352,6 +363,8 @@ Formats that work:
         <button class="btn btn-blue" onclick="copyTicketToClipboard()">📋 Copy Ticket</button>
         <button class="btn btn-green" onclick="shareTicket()">📤 Share</button>
     </div>
+    <button class="btn btn-orange" onclick="optimizeTicketToBudget()" style="margin-bottom:10px;">Optimize Ticket to Budget</button>
+    <div id="ticketOptimizationResult" style="display:none;margin-bottom:10px;"></div>
     <div id="ticketsList"></div>
 </div>
 
@@ -467,6 +480,8 @@ document.addEventListener('DOMContentLoaded', function () {
 let matches = [], matchCounter = 0;
 let modelWeights = { poisson: 0.35, elo: 0.35, market: 0.30 };
 let teamRatings = {}, outcomes = [];
+let leaguePerformance = {};
+const LEAGUE_MIN_SAMPLES = 12;
 let currentPrompt = '';
 
 // Store match data in memory so we don't depend on DOM for learning
@@ -479,6 +494,7 @@ function loadFromStorage() {
             const data = JSON.parse(saved);
             if (data.teamRatings) teamRatings = data.teamRatings;
             if (data.outcomes) outcomes = data.outcomes;
+            if (data.leaguePerformance) leaguePerformance = data.leaguePerformance;
             if (data.matchDataStore) matchDataStore = data.matchDataStore;
             if (data.modelWeights) {
                 modelWeights = data.modelWeights;
@@ -496,7 +512,7 @@ function loadFromStorage() {
 
 function saveToStorage() {
     localStorage.setItem('poolAnalyzerData', JSON.stringify({
-        teamRatings, outcomes, modelWeights, matchDataStore, savedAt: new Date().toISOString()
+        teamRatings, outcomes, modelWeights, leaguePerformance, matchDataStore, savedAt: new Date().toISOString()
     }));
 }
 
@@ -528,11 +544,19 @@ function showSavedTickets() {
     let html = '<div style="max-height:300px;overflow-y:auto;">';
     saved.reverse().forEach((t, i) => {
         const date = new Date(t.generatedAt).toLocaleString();
+        const savedMatches = Array.isArray(t.matches) ? t.matches : [];
+        const valueEconomics = t.valueTicket || buildTicketEconomics(
+            savedMatches.map(match => match.pick || 'H'), t.poolType, Number(t.bankroll) || 100, t.valueOps || []
+        );
+        const confidenceEconomics = t.confidenceTicket || buildTicketEconomics(
+            savedMatches.map(match => match.confidencePick || match.pick || 'H'), t.poolType, Number(t.bankroll) || 100, t.valueOps || []
+        );
         html += '<div style="background:rgba(0,0,0,0.2);border-radius:8px;padding:10px;margin-bottom:8px;font-size:0.8em;">';
         html += '<div style="color:#e94560;font-weight:700;">' + t.roundName + ' — ' + t.poolType + '</div>';
         html += '<div style="color:#666;font-size:0.75em;">' + date + '</div>';
+        html += '<div style="color:#aaa;margin-top:4px;">Value: ' + valueEconomics.totalLines + ' lines · R' + valueEconomics.totalCost.toFixed(2) + ' | Confidence: ' + confidenceEconomics.totalLines + ' lines · R' + confidenceEconomics.totalCost.toFixed(2) + '</div>';
         html += '<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">';
-        t.matches.forEach(m => {
+        savedMatches.forEach(m => {
             const badge = m.isValue ? '💎' : '';
             html += '<div style="background:rgba(255,255,255,0.05);padding:4px 6px;border-radius:4px;">';
             html += m.home + ' v ' + m.away + '<br>';
@@ -807,6 +831,7 @@ function copyPrompt() {
 
 function init() {
     loadFromStorage();
+    loadTicketSettings();
     if (Object.keys(teamRatings).length === 0) {
         teamRatings = {
             "Manchester United": 1650, "Liverpool": 1780, "Arsenal": 1750, "Chelsea": 1620,
@@ -1136,6 +1161,154 @@ function bayesianFusion(models, weights) {
     return normalizeProbabilities(evidence);
 }
 
+function toggleDebug() {
+    const panel = document.getElementById('debugPanel');
+    if (!panel) return;
+    panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+}
+
+function detectLeague(home, away) {
+    const teams = `${home || ''} ${away || ''}`.toLowerCase();
+    const leagues = [
+        ['EPL', ['manchester united','manchester city','liverpool','arsenal','chelsea','tottenham']],
+        ['La Liga', ['real madrid','barcelona','atletico madrid','sevilla']],
+        ['Bundesliga', ['bayern munich','dortmund','leverkusen','leipzig']],
+        ['Serie A', ['juventus','ac milan','inter milan','napoli','roma']],
+        ['PSL', ['orlando pirates','mamelodi sundowns','kaizer chiefs','stellenbosch']]
+    ];
+    const match = leagues.find(([, names]) => names.some(name => teams.includes(name)));
+    return match ? match[0] : 'Unknown';
+}
+
+function calibrationSnapshot(league) {
+    const key = String(league || 'Unknown').trim() || 'Unknown';
+    const specific = leaguePerformance[key];
+    if (specific && specific.samples >= LEAGUE_MIN_SAMPLES) {
+        return { weights: specific.weights, source: `${key} (${specific.samples} samples)`, specific: true };
+    }
+    return { weights: modelWeights, source: specific ? `global (only ${specific.samples}/${LEAGUE_MIN_SAMPLES} ${key} samples)` : 'global (no league history)', specific: false };
+}
+
+function formCompleteness(m) {
+    const stored = matchDataStore[m] || {};
+    const values = ['hgs','hgc','ags','agc'].map(key =>
+        getInputFloat(`${key}_${m}`, Number.parseFloat(stored[key]))
+    );
+    return values.filter(value => Number.isFinite(value) && value >= 0 && value <= 8).length / 4;
+}
+
+function eloReliabilityForMatch(m, eloResult) {
+    if (!eloResult.available) return 0;
+    const stored = matchDataStore[m] || {};
+    const home = getInputVal(`home_${m}`, stored.home || '');
+    const away = getInputVal(`away_${m}`, stored.away || '');
+    const samples = outcomes.filter(item => item.home === home || item.away === home || item.home === away || item.away === away).length;
+    return Math.min(1, 0.55 + samples / 20);
+}
+
+function adaptiveWeights(m, modelResults, activeModels, agreement, disagreement) {
+    const stored = matchDataStore[m] || {};
+    const league = getInputVal(`league_${m}`, stored.league || 'Unknown');
+    const calibration = calibrationSnapshot(league);
+    const adjusted = { poisson: 0, elo: 0, market: 0 };
+    const reasons = {};
+    const completeness = formCompleteness(m);
+    const eloReliability = eloReliabilityForMatch(m, modelResults.elo);
+    const consensus = activeModels.length ? normalizeProbabilities(activeModels.reduce((acc, item) => {
+        acc.H += item.dist.H; acc.D += item.dist.D; acc.A += item.dist.A; return acc;
+    }, { H: 0, D: 0, A: 0 })) : { H: 1/3, D: 1/3, A: 1/3 };
+
+    activeModels.forEach(item => {
+        let multiplier = 1;
+        const notes = [`${calibration.source} calibration`];
+        if (item.name === 'poisson') {
+            const factor = 0.65 + 0.35 * completeness;
+            multiplier *= factor;
+            notes.push(`form completeness ${Math.round(completeness * 100)}%`);
+        }
+        if (item.name === 'elo') {
+            const factor = 0.70 + 0.30 * eloReliability;
+            multiplier *= factor;
+            notes.push(`Elo reliability ${Math.round(eloReliability * 100)}%`);
+        }
+        if (item.name === 'market') {
+            const overround = modelResults.market.overround || 1;
+            const excess = Math.max(0, overround - 1);
+            const factor = Math.max(0.65, 1 - excess * 2.5);
+            multiplier *= factor;
+            notes.push(`market overround ${(excess * 100).toFixed(1)}%`);
+        }
+        const distance = (Math.abs(item.dist.H-consensus.H)+Math.abs(item.dist.D-consensus.D)+Math.abs(item.dist.A-consensus.A))/2;
+        const agreementFactor = Math.max(0.75, 1 - distance * 0.5);
+        multiplier *= agreementFactor;
+        notes.push(distance < 0.08 ? 'close to model consensus' : `consensus distance ${(distance*100).toFixed(0)}%`);
+        if (disagreement > 0.35) {
+            multiplier *= 0.92;
+            notes.push('strong-disagreement caution');
+        } else if (agreement.unanimous && activeModels.length > 1) {
+            multiplier *= 1.04;
+            notes.push('unanimous direction boost');
+        }
+        adjusted[item.name] = Math.max(0.01, (calibration.weights[item.name] || 0) * multiplier);
+        reasons[item.name] = notes;
+    });
+
+    const total = Object.values(adjusted).reduce((sum, value) => sum + value, 0);
+    if (total > 0) Object.keys(adjusted).forEach(name => adjusted[name] /= total);
+    else activeModels.forEach(item => { adjusted[item.name] = 1 / activeModels.length; });
+    return { weights: adjusted, reasons, calibration, completeness, eloReliability };
+}
+
+function dataQualityDiagnostic(modelResults) {
+    const p = modelResults.poisson.available, e = modelResults.elo.available, m = modelResults.market.available;
+    if (p && e && m) return { label: 'Full P/E/M', score: 1 };
+    if (p && m) return { label: 'P + M', score: 0.72 };
+    if (e && m) return { label: 'E + M', score: 0.68 };
+    if (m && !p && !e) return { label: 'Market only', score: 0.35 };
+    return { label: 'Insufficient data', score: (p || e) ? 0.30 : 0 };
+}
+
+function recommendedCover(metrics) {
+    if (metrics.decisionType === 'Single') return metrics.best;
+    const elevatedDrawRisk = metrics.drawRisk >= 0.45;
+    if (elevatedDrawRisk && metrics.best !== 'D') return metrics.best === 'H' ? 'H/D' : 'D/A';
+    if (metrics.best === 'D') return metrics.second === 'H' ? 'H/D' : 'D/A';
+    return `${metrics.best}/${metrics.second}`;
+}
+
+function reasoningScorecard(m, modelResults, finalDist, metrics, dataDiagnostic) {
+    const stored = matchDataStore[m] || {};
+    const hgs = getInputFloat(`hgs_${m}`, Number.parseFloat(stored.hgs));
+    const hgc = getInputFloat(`hgc_${m}`, Number.parseFloat(stored.hgc));
+    const ags = getInputFloat(`ags_${m}`, Number.parseFloat(stored.ags));
+    const agc = getInputFloat(`agc_${m}`, Number.parseFloat(stored.agc));
+    const clamp = value => Math.max(-1, Math.min(1, value));
+    const side = metrics.best === 'H' ? 1 : metrics.best === 'A' ? -1 : 0;
+    const attackingEdge = Number.isFinite(hgs) && Number.isFinite(ags) ? clamp((hgs - ags) / 2.5) * side : 0;
+    const defensiveEdge = Number.isFinite(hgc) && Number.isFinite(agc) ? clamp((agc - hgc) / 2.5) * side : 0;
+    const homeAdvantage = metrics.best === 'H' ? 0.18 : metrics.best === 'A' ? -0.08 : 0;
+    const marketSupport = modelResults.market.available ? clamp((modelResults.market[metrics.best] - 1/3) * 2.5) : 0;
+    const agreement = metrics.agreement.score;
+    const drawPenalty = metrics.drawRisk * 0.65;
+    const disagreementPenalty = metrics.disagreement * 0.80;
+    const dataPenalty = (1 - dataDiagnostic.score) * 0.70;
+    const finalScore = Math.max(0, Math.min(100, 50 + 16*attackingEdge + 14*defensiveEdge + 18*homeAdvantage + 18*marketSupport + 12*(agreement-0.5) - 18*drawPenalty - 18*disagreementPenalty - 16*dataPenalty));
+    const positives = [];
+    if (attackingEdge > 0.15) positives.push('attacking form edge');
+    if (defensiveEdge > 0.15) positives.push('defensive edge');
+    if (marketSupport > 0.15) positives.push('market support');
+    if (metrics.agreement.score >= 0.67) positives.push('model agreement');
+    const cautions = [];
+    if (metrics.drawRisk >= 0.45) cautions.push('elevated draw risk');
+    if (metrics.disagreement >= 0.35) cautions.push('model disagreement');
+    if (dataDiagnostic.score < 0.7) cautions.push('limited data');
+    return {
+        attackingEdge, defensiveEdge, homeAdvantage, marketSupport, agreement,
+        drawPenalty, disagreementPenalty, dataPenalty, finalScore,
+        reason: `${metrics.best} leads${positives.length ? ` on ${positives.join(', ')}` : ' on the combined forecast'}${cautions.length ? `; caution: ${cautions.join(', ')}` : '.'}`
+    };
+}
+
 function calculateDecisionMetrics(finalDist, activeModels, dataQuality) {
     const ordered = ['H','D','A']
         .map(key => ({ key, value: finalDist[key] }))
@@ -1239,28 +1412,11 @@ function combinedModel(m) {
             reason: result.reason
         }));
 
-    const baseWeights = {
-        poisson: modelWeights.poisson,
-        elo: modelWeights.elo,
-        market: modelWeights.market
-    };
-
-    const activeWeightTotal = activeModels.reduce(
-        (sum, model) => sum + (baseWeights[model.name] || 0), 0
-    );
-
-    const weights = { poisson: 0, elo: 0, market: 0 };
-
-    if (activeWeightTotal > 0) {
-        activeModels.forEach(model => {
-            weights[model.name] =
-                baseWeights[model.name] / activeWeightTotal;
-        });
-    } else if (activeModels.length) {
-        activeModels.forEach(model => {
-            weights[model.name] = 1 / activeModels.length;
-        });
-    }
+    const distributions = activeModels.map(model => model.dist);
+    const initialAgreement = modelAgreement(distributions);
+    const initialDisagreement = modelDisagreement(distributions);
+    const adaptive = adaptiveWeights(m, modelResults, activeModels, initialAgreement, initialDisagreement);
+    const weights = adaptive.weights;
 
     let weightedAverage = { H: 1/3, D: 1/3, A: 1/3 };
     let bayesian = weightedAverage;
@@ -1286,20 +1442,17 @@ function combinedModel(m) {
         });
     }
 
-    const dataQuality = activeModels.length / 3;
+    const dataDiagnostic = dataQualityDiagnostic(modelResults);
+    const dataQuality = dataDiagnostic.score;
     const metrics = calculateDecisionMetrics(
         final,
         activeModels,
         dataQuality
     );
 
-    const forecastMode =
-        activeModels.length === 3 ? 'Full P/E/M forecast' :
-        activeModels.length === 2
-            ? `${activeModels.map(model => model.name.toUpperCase()).join(' + ')} forecast`
-            : activeModels.length === 1
-                ? `${activeModels[0].name.toUpperCase()}-only forecast`
-                : 'No valid forecast models';
+    metrics.cover = recommendedCover(metrics);
+    const scorecard = reasoningScorecard(m, modelResults, final, metrics, dataDiagnostic);
+    const forecastMode = dataDiagnostic.label;
 
     const evTrusted =
         activeModels.length >= 2 &&
@@ -1319,17 +1472,34 @@ function combinedModel(m) {
         activeModels: activeModels.map(model => model.name),
         unavailableModels,
         dataQuality,
+        dataDiagnostic,
+        weightReasons: adaptive.reasons,
+        calibration: adaptive.calibration,
+        scorecard,
         forecastMode,
         evTrusted
     };
 }
 
 function calcValue(m, c) {
-    if (!c.evTrusted) {
-        return {
-            trusted: false,
-            reason: 'EV disabled: fewer than two independent valid models'
-        };
+    const reject = (reason, details = {}) => {
+        const rejected = { trusted: false, valueClass: 'rejected', reason, ...details };
+        console.warn('Rejected value calculation', { match: m, reason, ...details });
+        return rejected;
+    };
+
+    const probabilities = { H: Number(c.H), D: Number(c.D), A: Number(c.A) };
+    const probabilityTotal = probabilities.H + probabilities.D + probabilities.A;
+    if (!Object.values(probabilities).every(value => Number.isFinite(value) && value >= 0 && value <= 1) ||
+        !Number.isFinite(probabilityTotal) || Math.abs(probabilityTotal - 1) > 0.01) {
+        return reject('Invalid forecast probabilities');
+    }
+
+    if (c.dataDiagnostic.label === 'Market only') {
+        return reject('Market-only forecast — EV disabled');
+    }
+    if (!c.evTrusted || c.activeModels.length < 2) {
+        return reject('Fewer than two independent valid models');
     }
 
     const stored = matchDataStore[m] || {};
@@ -1337,13 +1507,8 @@ function calcValue(m, c) {
     const pd = getInputFloat(`pd_${m}`, parseFloat(stored.pd) || 0);
     const pa = getInputFloat(`pa_${m}`, parseFloat(stored.pa) || 0);
 
-    if (![ph, pd, pa].every(
-        odds => Number.isFinite(odds) && odds > 1.01
-    )) {
-        return {
-            trusted: false,
-            reason: 'EV disabled: complete pool odds unavailable'
-        };
+    if (![ph, pd, pa].every(odds => Number.isFinite(odds) && odds > 1)) {
+        return reject('Missing or invalid pool odds');
     }
 
     const odds = { H: ph, D: pd, A: pa };
@@ -1362,33 +1527,76 @@ function calcValue(m, c) {
     };
 
     const expectedValue = {};
-    const kelly = {};
+    const kelly = {}, rawKelly = {};
 
     ['H','D','A'].forEach(key => {
         expectedValue[key] = c[key] * odds[key] - 1;
         const netOdds = odds[key] - 1;
         const lossProbability = 1 - c[key];
-        const fullKelly = netOdds > 0
+        rawKelly[key] = netOdds > 0
             ? (netOdds * c[key] - lossProbability) / netOdds
-            : 0;
-        kelly[key] = Math.max(0, fullKelly);
+            : NaN;
+        kelly[key] = Math.max(0, rawKelly[key]);
     });
 
     const best = ['H','D','A'].reduce(
         (a, b) => expectedValue[a] > expectedValue[b] ? a : b
     );
 
+    const details = {
+        odds, poolP, edge, val: edge, expectedValue, kelly, best,
+        score: expectedValue[best], probability: probabilities[best],
+        quarterKelly: kelly[best] * 0.25,
+        mainForecast: c.metrics.best,
+        recommendedCover: c.metrics.cover
+    };
+    if (!Object.values(expectedValue).every(Number.isFinite) ||
+        !Object.values(kelly).every(value => Number.isFinite(value) && value >= 0)) {
+        return reject('Invalid EV or Kelly calculation', details);
+    }
+    if (probabilities[best] < 0.20) {
+        return reject('Selection probability below 20%', details);
+    }
+
+    const coverOutcomes = String(c.metrics.cover || '').split('/');
+    const candidateClass = best === c.metrics.best
+        ? 'forecast_aligned'
+        : coverOutcomes.includes(best) && c.metrics.decisionType !== 'Single'
+            ? 'cover_aligned'
+            : 'speculative_contrary';
+
+    if (candidateClass === 'speculative_contrary') {
+        const orderedProbabilities = ['H','D','A'].sort((a, b) => probabilities[b] - probabilities[a]);
+        const strictFailures = [];
+        if (expectedValue[best] <= 0.12) strictFailures.push('Contrary pick below 12% EV');
+        if (c.metrics.confidenceScore < 0.65) strictFailures.push('Confidence below 65%');
+        if (c.scorecard.finalScore < 60) strictFailures.push('Reasoning score too low');
+        if (c.metrics.disagreement >= 0.20) strictFailures.push('Excessive disagreement');
+        if (probabilities[best] < 0.30) strictFailures.push('Selection probability below 30%');
+        if (orderedProbabilities[2] === best) strictFailures.push('Contrary selection is lowest probability');
+        if (!(details.quarterKelly > 0) || !(rawKelly[best] > 0)) strictFailures.push('Quarter Kelly is zero');
+        if (strictFailures.length) {
+            return reject(`Rejected speculative EV — ${strictFailures.join('; ')}`, {
+                ...details, candidateClass, failedReasons: strictFailures
+            });
+        }
+    } else {
+        const normalFailures = [];
+        if (expectedValue[best] <= 0.05) normalFailures.push('EV does not exceed 5%');
+        if (c.metrics.confidenceScore < 0.55) normalFailures.push('Confidence below 55%');
+        if (c.metrics.disagreement >= 0.35) normalFailures.push('Excessive disagreement');
+        if (!(details.quarterKelly > 0) || !(rawKelly[best] > 0)) normalFailures.push('Quarter Kelly is zero');
+        if (normalFailures.length) {
+            return reject(`No Bet — ${normalFailures.join('; ')}`, {
+                ...details, candidateClass, failedReasons: normalFailures
+            });
+        }
+    }
+
     return {
         trusted: true,
-        odds,
-        poolP,
-        edge,
-        val: edge,
-        expectedValue,
-        kelly,
-        best,
-        score: expectedValue[best],
-        quarterKelly: kelly[best] * 0.25
+        valueClass: candidateClass,
+        ...details
     };
 }
 
@@ -1399,7 +1607,7 @@ function runAnalysis() {
     resultsDiv.innerHTML = '';
     let totalConf = 0, minConf = 1, maxConf = 0;
     let totalPredictability = 0, totalDisagreement = 0;
-    const valueOps = [], recommendations = {}, decisionMetrics = {};
+    const valueOps = [], valueResults = {}, recommendations = {}, decisionMetrics = {};
 
     matches.forEach(m => {
         const stored = matchDataStore[m] || {};
@@ -1417,30 +1625,50 @@ function runAnalysis() {
         totalPredictability += metrics.predictability;
         totalDisagreement += metrics.disagreement;
         recommendations[m] = best;
+        metrics.probabilities = { H: c.H, D: c.D, A: c.A };
         decisionMetrics[m] = metrics;
+        valueResults[m] = v;
 
-        if (v && v.trusted && v.score > 0.03) {
+        if (v && v.trusted) {
             valueOps.push({
+                matchId: m,
                 match: `${home} vs ${away}`,
                 sel: v.best,
                 score: v.score,
                 edge: v.edge[v.best],
                 kelly: v.kelly[v.best],
-                quarterKelly: v.quarterKelly
+                quarterKelly: v.quarterKelly,
+                probability: v.probability,
+                mainForecast: v.mainForecast,
+                recommendedCover: v.recommendedCover,
+                valueClass: v.valueClass
             });
         }
 
         const color = metrics.confidenceBand === 'High' ? '#2d8a4e' : metrics.confidenceBand === 'Medium' ? '#f39c12' : '#e94560';
         const agreementText = `${Math.round(metrics.agreement.score*100)}% (${metrics.agreement.winners.join('/')})`;
+        const weightReasonText = ['poisson','elo','market'].filter(name => c.weights[name] > 0).map(name =>
+            `${name[0].toUpperCase()} ${Math.round(c.weights[name]*100)}%: ${(c.weightReasons[name] || []).join(', ')}`
+        ).join('<br>');
+        const sc = c.scorecard;
         const decisionBackground = metrics.decisionType === 'Single' ? 'rgba(45,138,78,.10)' : metrics.decisionType === 'Cover' ? 'rgba(243,156,18,.10)' : 'rgba(233,69,96,.10)';
-        const valueHtml = v && v.trusted ? `
-            <div style="font-size:.8em;margin-top:7px;color:${v.score>0?'#2d8a4e':'#888'};font-weight:600;">
-                💎 Best EV: ${v.best} ${v.score>=0?'+':''}${(v.score*100).toFixed(1)}%
-                · Edge ${(v.edge[v.best]*100).toFixed(1)}%
-                · ¼ Kelly ${(v.quarterKelly*100).toFixed(1)}%
+        const valueHtml = v && v.trusted && v.valueClass === 'forecast_aligned' ? `
+            <div style="font-size:.8em;margin-top:7px;color:#2d8a4e;font-weight:600;">
+                💎 Forecast-aligned value: ${v.best}<br>
+                EV: +${(v.score*100).toFixed(1)}% · ¼ Kelly: ${(v.quarterKelly*100).toFixed(1)}%
+            </div>` : v && v.trusted && v.valueClass === 'cover_aligned' ? `
+            <div style="font-size:.8em;margin-top:7px;color:#4a90d9;font-weight:600;">
+                💎 Cover-aligned value: ${v.best}<br>
+                Main forecast: ${v.mainForecast} · Recommended cover: ${v.recommendedCover}<br>
+                EV: +${(v.score*100).toFixed(1)}% · ¼ Kelly: ${(v.quarterKelly*100).toFixed(1)}%
+            </div>` : v && v.trusted && v.valueClass === 'speculative_contrary' ? `
+            <div style="font-size:.8em;margin-top:7px;padding:7px;border-radius:7px;background:rgba(233,69,96,.12);border:1px solid rgba(233,69,96,.55);color:#e94560;font-weight:600;">
+                ⚠️ Speculative upset value: ${v.best}<br>
+                Main forecast: ${v.mainForecast} · Probability: ${(v.probability*100).toFixed(0)}% · EV: +${(v.score*100).toFixed(1)}%<br>
+                High-risk selection — excluded from the primary Value Ticket
             </div>` : `
             <div style="font-size:.78em;margin-top:7px;color:#f39c12;">
-                ⚠️ ${v && v.reason ? v.reason : 'EV unavailable'}
+                ⚠️ ${v && v.reason ? v.reason : 'No Bet — EV unavailable'}
             </div>`;
 
         resultsDiv.innerHTML += `
@@ -1458,11 +1686,12 @@ function runAnalysis() {
                     Bayesian: H${(c.bayesian.H*100).toFixed(0)}% D${(c.bayesian.D*100).toFixed(0)}% A${(c.bayesian.A*100).toFixed(0)}%
                 </div>
                 <div style="font-size:.75em;color:#4a90d9;margin-top:6px;">
-                    ${c.forecastMode} · Active weights:
+                    Data quality: <strong>${c.dataDiagnostic.label}</strong> · Active weights:
                     P${Math.round(c.weights.poisson*100)}%
                     E${Math.round(c.weights.elo*100)}%
                     M${Math.round(c.weights.market*100)}%
                 </div>
+                <div style="font-size:.70em;color:#888;margin-top:4px;line-height:1.45;">${weightReasonText}</div>
                 ${c.unavailableModels.length ? `
                     <div style="font-size:.72em;color:#f39c12;margin-top:5px;">
                         Excluded: ${c.unavailableModels.map(item =>
@@ -1476,14 +1705,20 @@ function runAnalysis() {
                     <div class="metric-box"><span class="metric-label">Decision confidence</span><span class="metric-value">${(metrics.predictability*100).toFixed(0)}%</span></div>
                     <div class="metric-box"><span class="metric-label">Draw risk</span><span class="metric-value">${(metrics.drawRisk*100).toFixed(0)}%</span></div>
                 </div>
+                <div style="margin-top:8px;padding:8px;border-radius:8px;background:rgba(255,255,255,.035);font-size:.72em;line-height:1.5;">
+                    <strong>Reasoning scorecard: ${sc.finalScore.toFixed(0)}/100</strong><br>
+                    Attack ${sc.attackingEdge>=0?'+':''}${(sc.attackingEdge*100).toFixed(0)} · Defence ${sc.defensiveEdge>=0?'+':''}${(sc.defensiveEdge*100).toFixed(0)} · Home ${sc.homeAdvantage>=0?'+':''}${(sc.homeAdvantage*100).toFixed(0)} · Market ${sc.marketSupport>=0?'+':''}${(sc.marketSupport*100).toFixed(0)}<br>
+                    Agreement +${(sc.agreement*100).toFixed(0)} · Draw penalty -${(sc.drawPenalty*100).toFixed(0)} · Disagreement penalty -${(sc.disagreementPenalty*100).toFixed(0)} · Data penalty -${(sc.dataPenalty*100).toFixed(0)}<br>
+                    <span style="color:#ccc;">${sc.reason}</span>
+                </div>
                 <div class="decision-note" style="background:${decisionBackground};color:${color};border:1px solid ${color}55;">
                     <strong>${metrics.confidenceBand} confidence · ${metrics.decisionType}</strong><br>
                     Model disagreement ${(metrics.disagreement*100).toFixed(0)}%.
                     ${metrics.decisionType === 'Single'
                         ? 'The leading outcome has enough separation for a single selection.'
                         : metrics.decisionType === 'Cover'
-                        ? `Consider covering ${best}/${metrics.second}.`
-                        : 'The distribution is too uncertain for a strong single-outcome call.'}
+                        ? `Recommended cover: ${metrics.cover}.`
+                        : `Recommended cover: ${metrics.cover}; avoid a single-outcome bet.`}
                 </div>
                 ${valueHtml}
             </div>`;
@@ -1498,31 +1733,238 @@ function runAnalysis() {
     banner.style.cssText = `background:${rc}22;border:2px solid ${rc};color:${rc};`;
     banner.innerHTML = `${risk} SLATE RISK | Avg ${(avgConf*100).toFixed(0)}% | Decision confidence ${(avgPredictability*100).toFixed(0)}% | Disagreement ${(avgDisagreement*100).toFixed(0)}%`;
 
+    const renderValueGroup = (title, items, color, formatter) => `
+        <div style="margin-bottom:10px;">
+            <div style="font-size:.76em;font-weight:700;color:${color};margin-bottom:3px;">${title}</div>
+            ${items.length ? items.map(item => `
+                <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid ${color}33;font-size:.80em;">
+                    <span>${item.match}</span><span style="color:${color};font-weight:700;text-align:right;">${formatter(item)}</span>
+                </div>`).join('') : '<div style="color:#666;font-size:.78em;padding:3px 0;">None</div>'}
+        </div>`;
+    const rejectedValues = matches.map(m => {
+        const stored = matchDataStore[m] || {};
+        return { match: `${getInputVal(`home_${m}`, stored.home || 'Home')} vs ${getInputVal(`away_${m}`, stored.away || 'Away')}`, ...valueResults[m] };
+    }).filter(item => !item.trusted);
+    const alignedValues = valueOps.filter(item => item.valueClass === 'forecast_aligned');
+    const coverValues = valueOps.filter(item => item.valueClass === 'cover_aligned');
+    const speculativeValues = valueOps.filter(item => item.valueClass === 'speculative_contrary');
     const vl = document.getElementById('valueList');
-    vl.innerHTML = valueOps.length ? valueOps.map(v => `
-        <div style="display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid rgba(45,138,78,.15);font-size:.82em;">
-            <span>${v.match}</span>
-            <span style="color:#2d8a4e;font-weight:700;text-align:right;">${v.sel} EV +${(v.score*100).toFixed(1)}%<br><small>¼ Kelly ${(v.quarterKelly*100).toFixed(1)}%</small></span>
-        </div>`).join('') : '<div style="color:#666;font-size:.85em;">No positive-EV opportunities found</div>';
+    vl.innerHTML =
+        renderValueGroup('Forecast-Aligned Value', alignedValues, '#2d8a4e', item => `${item.sel} · EV +${(item.score*100).toFixed(1)}%<br><small>¼ Kelly ${(item.quarterKelly*100).toFixed(1)}%</small>`) +
+        renderValueGroup('Cover-Aligned Value', coverValues, '#4a90d9', item => `${item.sel} in ${item.recommendedCover}<br><small>EV +${(item.score*100).toFixed(1)}%</small>`) +
+        renderValueGroup('High-Risk Speculative Alternatives', speculativeValues, '#e94560', item => `${item.sel} · P ${(item.probability*100).toFixed(0)}%<br><small>EV +${(item.score*100).toFixed(1)}%</small>`) +
+        renderValueGroup('No-Bet / Rejected EV', rejectedValues, '#f39c12', item => item.reason || 'No Bet');
 
     document.getElementById('resultsSection').classList.remove('hidden');
-    window.lastAnalysis = { recommendations, valueOps, decisionMetrics };
+    window.lastAnalysis = { recommendations, valueOps, valueResults, decisionMetrics };
     toast('✅ Decision analysis complete');
+}
+
+function parseSelectionOutcomes(selection) {
+    const validOrder = ['H','D','A'];
+    const rawTokens = String(selection == null ? '' : selection)
+        .split('/')
+        .map(token => token.trim().toUpperCase());
+    const hasEmptyToken = rawTokens.some(token => !token);
+    const tokens = rawTokens.filter(Boolean);
+    const invalidTokens = tokens.filter(token => !validOrder.includes(token));
+    const outcomes = validOrder.filter(outcome => tokens.includes(outcome));
+    return {
+        valid: !hasEmptyToken && tokens.length > 0 && invalidTokens.length === 0 && outcomes.length > 0,
+        outcomes,
+        invalidTokens: hasEmptyToken ? [...invalidTokens, '(empty)'] : invalidTokens,
+        normalized: outcomes.join('/')
+    };
+}
+
+function countSelectionOutcomes(selection) {
+    const parsed = parseSelectionOutcomes(selection);
+    return parsed.valid ? parsed.outcomes.length : 0;
+}
+
+function normalizeSelection(selection) {
+    const parsed = parseSelectionOutcomes(selection);
+    return parsed.valid ? parsed.normalized : '';
+}
+
+function calculateTicketLines(ticketSelections) {
+    const invalidSelections = [];
+    const selectionCounts = [];
+    let lines = 1;
+    const maxLines = 1000000;
+    if (!Array.isArray(ticketSelections) || ticketSelections.length === 0) {
+        return { valid: false, lines: 0, selectionCounts, invalidSelections: [{ index: -1, selection: '', reason: 'No selections' }] };
+    }
+    ticketSelections.forEach((selection, index) => {
+        const parsed = parseSelectionOutcomes(selection);
+        if (!parsed.valid) {
+            invalidSelections.push({ index, selection, invalidTokens: parsed.invalidTokens, reason: 'Invalid or empty selection' });
+            selectionCounts.push(0);
+            return;
+        }
+        selectionCounts.push(parsed.outcomes.length);
+        if (lines <= maxLines) lines *= parsed.outcomes.length;
+    });
+    if (invalidSelections.length) return { valid: false, lines: 0, selectionCounts, invalidSelections };
+    if (!Number.isSafeInteger(lines) || lines <= 0 || lines > maxLines) {
+        return { valid: false, lines: 0, selectionCounts, invalidSelections: [{ index: -1, selection: '', reason: `Ticket exceeds ${maxLines.toLocaleString()} lines` }] };
+    }
+    return { valid: true, lines, selectionCounts, invalidSelections: [] };
+}
+
+function getBaseLineCost(poolType) {
+    const costs = { Soccer6: 6, Soccer10: 2, Soccer13: 2 };
+    return costs[poolType] || 2;
+}
+
+function calculateTicketCost(lines, baseCost) {
+    const safeLines = Number(lines), safeBaseCost = Number(baseCost);
+    if (!Number.isSafeInteger(safeLines) || safeLines <= 0 || !Number.isFinite(safeBaseCost) || safeBaseCost <= 0) {
+        return { valid: false, totalCost: 0, reason: 'Invalid line count or base cost' };
+    }
+    const totalCost = safeLines * safeBaseCost;
+    return Number.isFinite(totalCost)
+        ? { valid: true, totalCost }
+        : { valid: false, totalCost: 0, reason: 'Ticket cost overflow' };
+}
+
+function getTicketSettings() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('poolAnalyzerTicketSettings') || '{}'); } catch (error) { console.warn('Ticket settings load failed', error); }
+    const bankrollElement = document.getElementById('bankrollInput');
+    const maxSpendElement = document.getElementById('maxSpendInput');
+    const bankrollValue = bankrollElement ? Number(bankrollElement.value) : Number(saved.bankroll);
+    const maxSpendValue = maxSpendElement ? Number(maxSpendElement.value) : Number(saved.maxSpend);
+    return {
+        bankroll: Number.isFinite(bankrollValue) && bankrollValue > 0 ? bankrollValue : 100,
+        maxSpend: Number.isFinite(maxSpendValue) && maxSpendValue > 0 ? maxSpendValue : null,
+        maxTicketExposure: 0.10
+    };
+}
+
+function saveTicketSettings() {
+    const settings = getTicketSettings();
+    const bankrollElement = document.getElementById('bankrollInput');
+    if (bankrollElement && (!Number.isFinite(Number(bankrollElement.value)) || Number(bankrollElement.value) <= 0)) bankrollElement.value = settings.bankroll;
+    localStorage.setItem('poolAnalyzerTicketSettings', JSON.stringify(settings));
+}
+
+function loadTicketSettings() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('poolAnalyzerTicketSettings') || '{}'); } catch (error) { console.warn('Ticket settings load failed', error); }
+    const bankrollElement = document.getElementById('bankrollInput');
+    const maxSpendElement = document.getElementById('maxSpendInput');
+    if (bankrollElement) bankrollElement.value = Number.isFinite(Number(saved.bankroll)) && Number(saved.bankroll) > 0 ? saved.bankroll : 100;
+    if (maxSpendElement) maxSpendElement.value = Number.isFinite(Number(saved.maxSpend)) && Number(saved.maxSpend) > 0 ? saved.maxSpend : '';
+}
+
+function calculateTicketAffordability(requiredTicketCost, bankroll, valueOps, maxSpend = null) {
+    const accepted = (valueOps || []).filter(value =>
+        ['forecast_aligned','cover_aligned'].includes(value.valueClass) &&
+        Number.isFinite(Number(value.quarterKelly)) && Number(value.quarterKelly) > 0
+    );
+    // Quarter Kelly applies to individual edges. Pool lines are correlated, so budgets are summed only as a signal and capped.
+    const aggregateKellyBudget = accepted.reduce((sum, value) => sum + bankroll * Number(value.quarterKelly), 0);
+    const exposureCap = bankroll * 0.10;
+    let allowedTicketBudget = Math.min(aggregateKellyBudget, exposureCap);
+    if (Number.isFinite(Number(maxSpend)) && Number(maxSpend) > 0) allowedTicketBudget = Math.min(allowedTicketBudget, Number(maxSpend));
+    const status = accepted.length === 0
+        ? 'NO KELLY SUPPORT'
+        : requiredTicketCost <= allowedTicketBudget + 1e-9
+            ? 'AFFORDABLE'
+            : 'OVER BUDGET';
+    return { status, bankroll, aggregateKellyBudget, exposureCap, allowedTicketBudget, requiredTicketCost, supportedSelections: accepted.length };
+}
+
+function buildTicketEconomics(selections, poolType, bankroll, valueOps, maxSpend = null) {
+    const lineResult = calculateTicketLines(selections);
+    const baseLineCost = getBaseLineCost(poolType);
+    const costResult = lineResult.valid ? calculateTicketCost(lineResult.lines, baseLineCost) : { valid: false, totalCost: 0 };
+    const valid = lineResult.valid && costResult.valid;
+    const totalCost = valid ? costResult.totalCost : 0;
+    return {
+        valid,
+        baseLineCost,
+        totalLines: valid ? lineResult.lines : 0,
+        totalCost,
+        selectionCounts: lineResult.selectionCounts,
+        invalidSelections: lineResult.invalidSelections,
+        affordability: calculateTicketAffordability(totalCost, bankroll, valueOps, maxSpend)
+    };
+}
+
+function ticketEconomicsHtml(economics, selectionTotal) {
+    if (!economics.valid) return `<div style="color:#e94560;font-weight:700;">Invalid ticket selections — cost not calculated.</div>`;
+    const a = economics.affordability;
+    const statusColor = a.status === 'AFFORDABLE' ? '#2d8a4e' : a.status === 'OVER BUDGET' ? '#e94560' : '#f39c12';
+    return `<div style="margin-top:10px;padding:10px;border-radius:8px;background:rgba(0,0,0,.22);font-size:.78em;line-height:1.55;">
+        <strong>Selections: ${selectionTotal} · Lines: ${economics.totalLines}</strong><br>
+        Base cost: R${economics.baseLineCost.toFixed(2)} · <strong>Total cost: R${economics.totalCost.toFixed(2)}</strong><br>
+        Bankroll: R${a.bankroll.toFixed(2)} · Kelly-informed budget: R${a.aggregateKellyBudget.toFixed(2)}<br>
+        10% exposure cap: R${a.exposureCap.toFixed(2)} · Allowed ticket budget: R${a.allowedTicketBudget.toFixed(2)}<br>
+        <strong style="color:${statusColor};">${a.status}</strong> — ${a.status === 'AFFORDABLE' ? 'Required cost is within the Kelly-informed budget.' : a.status === 'OVER BUDGET' ? 'Required cost exceeds the Kelly-informed budget.' : 'No accepted positive-EV selections support a Kelly budget.'}
+    </div>`;
+}
+
+function rankCoverReductions(selections, recommendations, decisionMetrics, matchIds) {
+    return selections.map((selection, index) => {
+        const parsed = parseSelectionOutcomes(selection);
+        const matchId = matchIds[index];
+        const metrics = decisionMetrics[matchId] || {};
+        const primary = recommendations[matchId];
+        const secondary = parsed.outcomes.find(outcome => outcome !== primary);
+        const secondaryProbability = metrics.probabilities && secondary ? Number(metrics.probabilities[secondary]) || 0 : 0;
+        const protectionValue =
+            0.35 * (Number(metrics.drawRisk) || 0) +
+            0.25 * (1 - (Number(metrics.confidenceScore) || 0)) +
+            0.20 * (Number(metrics.disagreement) || 0) +
+            0.20 * secondaryProbability;
+        return { index, matchId, selection: parsed.normalized, primary, secondary, protectionValue };
+    }).filter(item => countSelectionOutcomes(item.selection) > 1 && ['H','D','A'].includes(item.primary))
+      .sort((a, b) => a.protectionValue - b.protectionValue);
+}
+
+function suggestTicketReduction(selections, targetBudget, poolType, recommendations, decisionMetrics, matchIds) {
+    const optimized = selections.map(selection => normalizeSelection(selection));
+    const removals = [];
+    const ranked = rankCoverReductions(optimized, recommendations, decisionMetrics, matchIds);
+    const baseLineCost = getBaseLineCost(poolType);
+    let lineResult = calculateTicketLines(optimized);
+    let totalCost = lineResult.valid ? lineResult.lines * baseLineCost : Infinity;
+    for (const candidate of ranked) {
+        if (totalCost <= targetBudget) break;
+        optimized[candidate.index] = candidate.primary;
+        removals.push(candidate);
+        lineResult = calculateTicketLines(optimized);
+        totalCost = lineResult.valid ? lineResult.lines * baseLineCost : Infinity;
+    }
+    return { valid: lineResult.valid, selections: optimized, removals, totalLines: lineResult.lines, totalCost, withinBudget: totalCost <= targetBudget };
 }
 
 function generateTickets() {
     if (!window.lastAnalysis) { toast('Run analysis first!'); return; }
-    const { recommendations, valueOps, decisionMetrics = {} } = window.lastAnalysis;
+    const { recommendations, valueOps, valueResults = {}, decisionMetrics = {} } = window.lastAnalysis;
     const list = document.getElementById('ticketsList');
     list.innerHTML = '';
     const vs = {};
     matches.forEach(m => {
-        const stored = matchDataStore[m] || {};
-        const h = getInputVal(`home_${m}`, stored.home || '');
-        const vo = valueOps.find(v => v.match.includes(h));
-        vs[m] = vo ? vo.sel : recommendations[m];
+        const metrics = decisionMetrics[m];
+        const value = valueResults[m];
+        const conservativePick = metrics && metrics.decisionType !== 'Single' ? metrics.cover : recommendations[m];
+        if (value && value.trusted && value.valueClass === 'forecast_aligned') vs[m] = recommendations[m];
+        else if (value && value.trusted && value.valueClass === 'cover_aligned') vs[m] = metrics.cover;
+        else vs[m] = conservativePick;
     });
-    const fee = document.getElementById('poolType').value === 'Soccer6' ? 6 : 2;
+    const speculativeValues = valueOps.filter(value => value.valueClass === 'speculative_contrary');
+    const poolType = document.getElementById('poolType').value;
+    const settings = getTicketSettings();
+    saveTicketSettings();
+    const valueSelections = matches.map(m => vs[m]);
+    const confidenceSelections = matches.map(m =>
+        decisionMetrics[m] && decisionMetrics[m].decisionType !== 'Single' ? decisionMetrics[m].cover : recommendations[m]
+    );
+    const valueEconomics = buildTicketEconomics(valueSelections, poolType, settings.bankroll, valueOps, settings.maxSpend);
+    const confidenceEconomics = buildTicketEconomics(confidenceSelections, poolType, settings.bankroll, valueOps, settings.maxSpend);
     list.innerHTML += `
         <div class="ticket-card ticket-green">
             <h3 style="color:#2d8a4e;font-size:0.95em;margin-bottom:10px;">🎯 Value Ticket</h3>
@@ -1531,15 +1973,27 @@ function generateTickets() {
                     const stored = matchDataStore[m] || {};
                     const h = getInputVal(`home_${m}`, stored.home || 'Home');
                     const a = getInputVal(`away_${m}`, stored.away || 'Away');
-                    const isV = valueOps.some(v => v.match.includes(h));
+                    const value = valueResults[m];
+                    const isV = value && value.trusted && ['forecast_aligned','cover_aligned'].includes(value.valueClass);
+                    const valueLeg = value && value.valueClass === 'cover_aligned' ? ` · EV leg ${value.best}` : '';
                     return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;${isV?'border:1px solid #2d8a4e;':''}">
                         <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
-                        <div style="font-weight:700;color:${isV?'#2d8a4e':'#fff'};">${vs[m]}${isV?' 💎':''}</div>
+                        <div style="font-weight:700;color:${isV?'#2d8a4e':'#fff'};">${vs[m]}${isV?' 💎':''}${valueLeg}</div>
                     </div>`;
                 }).join('')}
             </div>
-            <div style="text-align:right;color:#e94560;font-weight:700;">Cost: R${fee}</div>
+            ${ticketEconomicsHtml(valueEconomics, matches.length)}
         </div>`;
+    if (speculativeValues.length) {
+        list.innerHTML += `
+            <div class="ticket-card" style="border-left:4px solid #e94560;background:rgba(233,69,96,.08);">
+                <h3 style="color:#e94560;font-size:0.95em;margin-bottom:8px;">⚠️ High-Risk Speculative Alternatives</h3>
+                <div style="font-size:.76em;color:#aaa;margin-bottom:8px;">Excluded from the standard ticket combination.</div>
+                ${speculativeValues.map(value => `<div style="padding:6px 0;border-bottom:1px solid rgba(233,69,96,.2);font-size:.82em;">
+                    ${value.match}: <strong style="color:#e94560;">${value.sel}</strong> · P ${(value.probability*100).toFixed(0)}% · EV +${(value.score*100).toFixed(1)}%
+                </div>`).join('')}
+            </div>`;
+    }
     list.innerHTML += `
         <div class="ticket-card ticket-blue">
             <h3 style="color:#4a90d9;font-size:0.95em;margin-bottom:10px;">⭐ Confidence Ticket</h3>
@@ -1550,31 +2004,45 @@ function generateTickets() {
                     const a = getInputVal(`away_${m}`, stored.away || 'Away');
                     return `<div style="background:rgba(0,0,0,0.2);padding:8px;border-radius:8px;font-size:0.85em;">
                         <div style="color:#888;font-size:0.8em;">${h} v ${a}</div>
-                        <div style="font-weight:700;">${recommendations[m]}</div>
+                        <div style="font-weight:700;">${decisionMetrics[m] && decisionMetrics[m].decisionType !== 'Single' ? decisionMetrics[m].cover : recommendations[m]}</div>
                     </div>`;
                 }).join('')}
             </div>
-            <div style="text-align:right;color:#e94560;font-weight:700;">Cost: R${fee}</div>
+            ${ticketEconomicsHtml(confidenceEconomics, matches.length)}
         </div>`;
     document.getElementById('ticketsSection').classList.remove('hidden');
 
     // Auto-save tickets to storage
     const ticketData = {
         generatedAt: new Date().toISOString(),
-        poolType: document.getElementById('poolType').value,
+        poolType,
         roundName: document.getElementById('roundName').value,
         recommendations: recommendations,
         valueOps: valueOps,
+        bankroll: settings.bankroll,
+        maxTicketExposure: settings.maxTicketExposure,
+        valueTicket: valueEconomics,
+        confidenceTicket: confidenceEconomics,
         matches: matches.map(m => {
             const stored = matchDataStore[m] || {};
+            const value = valueResults[m] || { valueClass: 'rejected', reason: 'No value result' };
+            const confidencePick = decisionMetrics[m] && decisionMetrics[m].decisionType !== 'Single'
+                ? decisionMetrics[m].cover
+                : recommendations[m];
             return {
                 id: m,
                 home: getInputVal('home_' + m, stored.home || ''),
                 away: getInputVal('away_' + m, stored.away || ''),
                 pick: vs[m] || recommendations[m],
-                isValue: valueOps.some(v => v.match.includes(getInputVal('home_' + m, stored.home || ''))),
+                confidencePick,
+                isValue: value.trusted && ['forecast_aligned','cover_aligned'].includes(value.valueClass),
+                valueClass: value.valueClass || 'rejected',
+                valueSelection: value.trusted ? value.best : null,
+                valueReason: value.reason || '',
+                valueProbability: Number.isFinite(value.probability) ? value.probability : null,
+                valueEV: Number.isFinite(value.score) ? value.score : null,
                 decisionType: decisionMetrics[m] ? decisionMetrics[m].decisionType : 'Single',
-                coverPick: decisionMetrics[m] ? decisionMetrics[m].second : null,
+                coverPick: decisionMetrics[m] ? decisionMetrics[m].cover : null,
                 confidenceMargin: decisionMetrics[m] ? decisionMetrics[m].margin : null
             };
         })
@@ -1586,14 +2054,80 @@ function generateTickets() {
 
     // Build copyable text and store it
     window.lastTicketText = buildTicketText(ticketData);
+    window.lastTicketData = ticketData;
 
     toast('🎫 Tickets generated & saved!');
+}
+
+function optimizeTicketToBudget() {
+    const ticketData = window.lastTicketData;
+    const output = document.getElementById('ticketOptimizationResult');
+    if (!ticketData || !window.lastAnalysis) {
+        toast('Generate tickets first!');
+        return;
+    }
+    const settings = getTicketSettings();
+    const economics = ticketData.valueTicket;
+    const targetBudget = settings.maxSpend || economics.affordability.allowedTicketBudget;
+    const originalSelections = ticketData.matches.map(match => match.pick);
+    const matchIds = ticketData.matches.map(match => match.id);
+    const suggestion = suggestTicketReduction(
+        originalSelections,
+        targetBudget,
+        ticketData.poolType,
+        window.lastAnalysis.recommendations,
+        window.lastAnalysis.decisionMetrics,
+        matchIds
+    );
+    const removalHtml = suggestion.removals.length
+        ? suggestion.removals.map(removal => {
+            const match = ticketData.matches[removal.index];
+            return `<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.08);">${match.home} vs ${match.away}: use <strong>${removal.primary}</strong> instead of ${removal.selection}</div>`;
+        }).join('')
+        : '<div>No removable covers were found.</div>';
+    const statusColor = suggestion.withinBudget ? '#2d8a4e' : '#e94560';
+    output.innerHTML = `<div style="padding:10px;border-radius:8px;background:rgba(230,126,34,.10);border:1px solid rgba(230,126,34,.45);font-size:.80em;line-height:1.5;">
+        <strong>Budget optimization preview</strong><br>
+        Original: ${economics.totalLines} lines · R${economics.totalCost.toFixed(2)}<br>
+        Target budget: R${targetBudget.toFixed(2)}<br>
+        Proposed: ${suggestion.totalLines} lines · R${suggestion.totalCost.toFixed(2)}<br>
+        <strong style="color:${statusColor};">${suggestion.withinBudget ? 'WITHIN BUDGET' : 'STILL OVER BUDGET'}</strong>
+        <div style="margin-top:6px;">${removalHtml}</div>
+        <div class="hint">The original ticket remains unchanged. Confirm to create a separate optimized comparison ticket.</div>
+        <button class="btn btn-orange" onclick="confirmOptimizedTicket()" ${suggestion.removals.length ? '' : 'disabled'}>Confirm Optimized Ticket</button>
+    </div>`;
+    output.style.display = 'block';
+    window.pendingOptimizedTicket = { ...suggestion, targetBudget };
+}
+
+function confirmOptimizedTicket() {
+    const suggestion = window.pendingOptimizedTicket;
+    const ticketData = window.lastTicketData;
+    if (!suggestion || !ticketData) {
+        toast('Run budget optimization first');
+        return;
+    }
+    const list = document.getElementById('ticketsList');
+    list.insertAdjacentHTML('beforeend', `<div class="ticket-card" style="border:2px solid #e67e22;background:rgba(230,126,34,.06);">
+        <h3 style="color:#e67e22;font-size:.95em;margin-bottom:8px;">Optimized Value Ticket — Comparison</h3>
+        ${ticketData.matches.map((match, index) => `<div style="font-size:.82em;padding:4px 0;">${match.home} v ${match.away}: <strong>${suggestion.selections[index]}</strong></div>`).join('')}
+        <div style="margin-top:8px;font-weight:700;">${suggestion.totalLines} lines · R${suggestion.totalCost.toFixed(2)}</div>
+        <div class="hint">Original ticket remains above for comparison.</div>
+    </div>`);
+    window.lastOptimizedTicket = suggestion;
+    toast('Optimized comparison ticket created');
 }
 
 function buildTicketText(ticketData) {
     const poolType = ticketData.poolType;
     const roundName = ticketData.roundName;
     const date = new Date(ticketData.generatedAt).toLocaleString();
+    const valueEconomics = ticketData.valueTicket || buildTicketEconomics(
+        ticketData.matches.map(match => match.pick), poolType, Number(ticketData.bankroll) || 100, ticketData.valueOps || []
+    );
+    const confidenceEconomics = ticketData.confidenceTicket || buildTicketEconomics(
+        ticketData.matches.map(match => match.confidencePick || match.pick), poolType, Number(ticketData.bankroll) || 100, ticketData.valueOps || []
+    );
 
     let text = '⚽ POOL ANALYZER TICKET\n';
     text += '═══════════════════════\n';
@@ -1605,32 +2139,46 @@ function buildTicketText(ticketData) {
     text += '💎 VALUE TICKET\n';
     text += '───────────────────────\n';
     ticketData.matches.forEach(m => {
-        const pickLabel = m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3';
+        const pickLabel = outcomeTicketLabel(m.pick);
         const valueMark = m.isValue ? ' 💎' : '';
         text += 'M' + m.id.replace('m','') + ': ' + m.home + ' vs ' + m.away + '\n';
         const coverText = m.decisionType && m.decisionType !== 'Single' && m.coverPick
-            ? ' | ' + m.decisionType + ': ' + m.pick + '/' + m.coverPick
+            ? ' | ' + m.decisionType + ': ' + m.coverPick
             : '';
         text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + valueMark + coverText + '\n';
     });
     text += '───────────────────────\n';
-    text += 'Cost: R' + (poolType === 'Soccer6' ? '6' : '2') + '\n\n';
+    text += 'Selections: ' + ticketData.matches.length + '\n';
+    text += 'Lines: ' + valueEconomics.totalLines + '\n';
+    text += 'Base cost per line: R' + valueEconomics.baseLineCost.toFixed(2) + '\n';
+    text += 'Total cost: R' + valueEconomics.totalCost.toFixed(2) + '\n\n';
 
     // Confidence Ticket
     text += '⭐ CONFIDENCE TICKET\n';
     text += '───────────────────────\n';
     ticketData.matches.forEach(m => {
-        const pickLabel = m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3';
+        const pickLabel = outcomeTicketLabel(m.confidencePick || m.pick);
         text += 'M' + m.id.replace('m','') + ': ' + m.home + ' vs ' + m.away + '\n';
-        text += '     → Pick: ' + m.pick + ' (' + pickLabel + ')' + '\n';
+        text += '     → Pick: ' + (m.confidencePick || m.pick) + ' (' + pickLabel + ')' + '\n';
     });
     text += '───────────────────────\n';
-    text += 'Cost: R' + (poolType === 'Soccer6' ? '6' : '2') + '\n\n';
+    text += 'Selections: ' + ticketData.matches.length + '\n';
+    text += 'Lines: ' + confidenceEconomics.totalLines + '\n';
+    text += 'Base cost per line: R' + confidenceEconomics.baseLineCost.toFixed(2) + '\n';
+    text += 'Total cost: R' + confidenceEconomics.totalCost.toFixed(2) + '\n\n';
 
     // Quick combo line
     text += 'QUICK COMBO: ';
-    text += ticketData.matches.map(m => m.pick === 'H' ? '1' : m.pick === 'D' ? '2' : '3').join('/') + '\n';
+    text += ticketData.matches.map(m => outcomeCompactLabel(m.pick)).join('/') + '\n';
+    const speculative = ticketData.valueOps.filter(value => value.valueClass === 'speculative_contrary');
+    if (speculative.length) {
+        text += '\n⚠️ HIGH-RISK SPECULATIVE ALTERNATIVES (not in combo)\n';
+        speculative.forEach(value => {
+            text += value.match + ': ' + value.sel + ' | P ' + (value.probability*100).toFixed(0) + '% | EV +' + (value.score*100).toFixed(1) + '%\n';
+        });
+    }
     text += '═══════════════════════\n';
+    text += 'Kelly values shown are based on individual selections. Pool ticket combinations are correlated and do not have a directly valid combined Kelly fraction. The ticket budget is therefore capped conservatively.\n';
     text += '⚠️ Educational tool. No profit guarantees.';
 
     return text;
@@ -1800,6 +2348,7 @@ function parseResultsBulk() {
             const forecastBeforeResult = combinedModel(bestMatch);
             outcomes.push({
                 mid: bestMatch, res: res.result, home, away,
+                league: getInputVal(`league_${bestMatch}`, stored.league || 'Unknown'),
                 time: new Date().toISOString(),
                 prediction: { H: forecastBeforeResult.H, D: forecastBeforeResult.D, A: forecastBeforeResult.A },
                 modelPredictions: {
@@ -1860,7 +2409,9 @@ function recordOutcome() {
 
     const forecastBeforeResult = combinedModel(mid);
     outcomes.push({
-        mid, res, home, away, time: new Date().toISOString(),
+        mid, res, home, away,
+        league: getInputVal(`league_${mid}`, stored && stored.league ? stored.league : 'Unknown'),
+        time: new Date().toISOString(),
         prediction: { H: forecastBeforeResult.H, D: forecastBeforeResult.D, A: forecastBeforeResult.A },
         modelPredictions: {
             poisson: forecastBeforeResult.poisson,
@@ -1891,6 +2442,53 @@ function brierScore(probabilities, actualResult) {
     }, 0);
 }
 
+function outcomeTicketLabel(pick) {
+    return String(pick || '').split('/').map(outcome =>
+        outcome === 'H' ? '1' : outcome === 'D' ? '2' : outcome === 'A' ? '3' : '?'
+    ).join('/');
+}
+
+function outcomeCompactLabel(pick) {
+    const parsed = parseSelectionOutcomes(pick);
+    return parsed.valid ? parsed.outcomes.map(outcome => outcome === 'H' ? '1' : outcome === 'D' ? '2' : '3').join('') : '?';
+}
+
+function rebuildLeaguePerformance() {
+    const groups = {};
+    outcomes.slice(-200).forEach(outcome => {
+        const league = String(outcome.league || 'Unknown').trim() || 'Unknown';
+        if (!groups[league]) groups[league] = { poisson: [], elo: [], market: [] };
+        ['poisson','elo','market'].forEach(model => {
+            const prediction = outcome.modelPredictions && outcome.modelPredictions[model];
+            if (prediction && prediction.available !== false && ['H','D','A'].every(key => Number.isFinite(Number(prediction[key])))) {
+                groups[league][model].push(brierScore(prediction, outcome.res));
+            }
+        });
+    });
+
+    leaguePerformance = {};
+    Object.entries(groups).forEach(([league, scores]) => {
+        const samples = Math.max(...Object.values(scores).map(items => items.length));
+        const brier = {}, skill = {};
+        ['poisson','elo','market'].forEach(model => {
+            brier[model] = scores[model].length
+                ? scores[model].reduce((sum, value) => sum + value, 0) / scores[model].length
+                : null;
+            skill[model] = brier[model] === null ? 0 : 1 / Math.max(brier[model], 0.05);
+        });
+        const total = skill.poisson + skill.elo + skill.market;
+        const learned = total > 0
+            ? { poisson: skill.poisson/total, elo: skill.elo/total, market: skill.market/total }
+            : { ...modelWeights };
+        const shrinkage = Math.min(0.65, Math.max(0, (samples - LEAGUE_MIN_SAMPLES + 1) / 30));
+        const weights = {};
+        ['poisson','elo','market'].forEach(model => {
+            weights[model] = (1-shrinkage)*modelWeights[model] + shrinkage*learned[model];
+        });
+        leaguePerformance[league] = { samples, brier, weights, shrinkage, updatedAt: new Date().toISOString() };
+    });
+}
+
 function selfLearn() {
     if (outcomes.length < 5) {
         const status = document.getElementById('learningStatus');
@@ -1915,7 +2513,9 @@ function selfLearn() {
         }
 
         ['poisson','elo','market'].forEach(model => {
-            if (predictions[model]) scores[model].push(brierScore(predictions[model], outcome.res));
+            if (predictions[model] && predictions[model].available !== false) {
+                scores[model].push(brierScore(predictions[model], outcome.res));
+            }
         });
     });
 
@@ -1941,6 +2541,7 @@ function selfLearn() {
         modelWeights.elo /= sum;
         modelWeights.market /= sum;
     }
+    rebuildLeaguePerformance();
 
     document.getElementById('poissonWeight').value = Math.round(modelWeights.poisson*100);
     document.getElementById('eloWeight').value = Math.round(modelWeights.elo*100);
@@ -1955,7 +2556,8 @@ function selfLearn() {
     status.innerHTML =
         `🧠 Calibrated on ${recent.length} recent outcomes.<br>` +
         `Brier — P:${averageScore.poisson.toFixed(3)} E:${averageScore.elo.toFixed(3)} M:${averageScore.market.toFixed(3)}<br>` +
-        `New weights — P:${(modelWeights.poisson*100).toFixed(0)}% E:${(modelWeights.elo*100).toFixed(0)}% M:${(modelWeights.market*100).toFixed(0)}%`;
+        `New weights — P:${(modelWeights.poisson*100).toFixed(0)}% E:${(modelWeights.elo*100).toFixed(0)}% M:${(modelWeights.market*100).toFixed(0)}%<br>` +
+        `League calibration: ${Object.values(leaguePerformance).filter(item => item.samples >= LEAGUE_MIN_SAMPLES).length} league(s) active at ${LEAGUE_MIN_SAMPLES}+ samples`;
     updateStats();
     toast('Model weights recalibrated');
 }
@@ -2020,7 +2622,7 @@ function loadLastPool() {
 }
 
 function exportData() {
-    const data = { teamRatings, outcomes, modelWeights, matchDataStore, lastPool: localStorage.getItem('lastPool'), exportedAt: new Date().toISOString() };
+    const data = { teamRatings, outcomes, modelWeights, leaguePerformance, matchDataStore, lastPool: localStorage.getItem('lastPool'), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2040,6 +2642,7 @@ function importData(input) {
             const data = JSON.parse(e.target.result);
             if (data.teamRatings) teamRatings = data.teamRatings;
             if (data.outcomes) outcomes = data.outcomes;
+            if (data.leaguePerformance) leaguePerformance = data.leaguePerformance;
             if (data.matchDataStore) matchDataStore = data.matchDataStore;
             if (data.modelWeights) {
                 modelWeights = data.modelWeights;
